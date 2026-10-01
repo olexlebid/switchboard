@@ -4,11 +4,14 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { saveAttachments, type IncomingFile } from './attachments';
+import { addUserMessage, busyWith, createChat, setChatMode } from './chat';
+import { SbError } from './errors';
 import { defaultConfigPath } from './config';
 import { maskSecrets } from './mask';
 import { readState, runsDir } from './store';
 import { matchAllowedProject } from './task-overview';
-import type { SwitchboardConfig } from './types';
+import type { AgentId, SwitchboardConfig } from './types';
 
 export type LaunchInput = {
   text: string;
@@ -64,18 +67,8 @@ function sbCommand(args: string[]): { cmd: string; args: string[]; cwd: string }
   return { cmd: process.execPath, args: ['--import', 'tsx', join(root, 'bin/sb.ts'), ...args], cwd: root };
 }
 
-/** Does any task of this project have a live `sb` process? (one task per project at a time) */
-function projectBusy(project: string): boolean {
-  return Object.values(readState().tasks).some((t) => {
-    if (t.project !== project || !t.pid || (t.status !== 'running' && t.status !== 'queued')) return false;
-    try {
-      process.kill(t.pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  });
-}
+/** Is a task or a chat of this project running right now? (one working tree, one agent at a time) */
+const projectBusy = (project: string): boolean => busyWith(project) !== undefined;
 
 /** Spawns a detached `sb` and waits briefly to report an immediate failure (dirty tree, bad input...). */
 async function spawnSb(args: string[], label: string, waitForNewTask: boolean): Promise<LaunchResult> {
@@ -117,20 +110,97 @@ async function spawnSb(args: string[], label: string, waitForNewTask: boolean): 
   return { ok: true, message: 'Запуск ініційовано; задача з’явиться в списку.' };
 }
 
-export async function launchTask(cfg: SwitchboardConfig, input: LaunchInput): Promise<LaunchResult> {
-  const v = validateLaunch(cfg, input);
-  if ('error' in v) return fail(v.error);
-  if (projectBusy(v.project)) return fail('У цьому проєкті вже виконується задача. Дочекайся її завершення.', 409);
-  return spawnSb(v.args, 'run', true);
+/** Saves uploaded files into the project and returns the batch folder, or an error text. */
+async function storeUploads(project: string, files: IncomingFile[] | undefined): Promise<{ dir?: string; error?: string; notes: string[] }> {
+  if (!files || files.length === 0) return { notes: [] };
+  const batch = await saveAttachments(project, files);
+  const notes = batch.rejected.map((r) => `${r.name}: ${r.reason}`);
+  if (batch.items.length === 0) return { error: `Жоден файл не прийнято. ${notes.join('; ')}`, notes };
+  return { dir: batch.dir, notes };
 }
 
-export async function resumeFromDashboard(cfg: SwitchboardConfig, id: string): Promise<LaunchResult> {
+export async function launchTask(cfg: SwitchboardConfig, input: LaunchInput, files?: IncomingFile[]): Promise<LaunchResult> {
+  const v = validateLaunch(cfg, input);
+  if ('error' in v) return fail(v.error);
+  if (projectBusy(v.project)) return fail('У цьому проєкті вже виконується задача або чат. Дочекайся завершення.', 409);
+  const up = await storeUploads(v.project, files);
+  if (up.error) return fail(up.error);
+  const args = up.dir ? [...v.args.slice(0, v.args.indexOf('--')), '--attachments', up.dir, ...v.args.slice(v.args.indexOf('--'))] : v.args;
+  const r = await spawnSb(args, 'run', true);
+  return r.ok && up.notes.length ? { ...r, message: `${r.message} Не прийнято: ${up.notes.join('; ')}` } : r;
+}
+
+export async function resumeFromDashboard(
+  cfg: SwitchboardConfig,
+  id: string,
+  extra: { note?: string; files?: IncomingFile[] } = {},
+): Promise<LaunchResult> {
   const task = readState().tasks[id];
   if (!task) return fail('Задачі не існує.', 404);
   if (!['waiting', 'blocked', 'failed'].includes(task.status)) return fail('Цю задачу не можна продовжити в поточному стані.', 409);
   if (!matchAllowedProject(cfg, task.project)) return fail('Проєкт задачі недоступний.', 409);
-  if (projectBusy(task.project)) return fail('У цьому проєкті вже виконується задача.', 409);
-  return spawnSb(['resume', id], 'resume', false);
+  if (projectBusy(task.project)) return fail('У цьому проєкті вже виконується задача або чат.', 409);
+  const note = (extra.note ?? '').replace(/\r\n/g, '\n').trim();
+  if (note.length > MAX_TEXT) return fail(`Відповідь задовга (максимум ${MAX_TEXT} символів).`);
+  const up = await storeUploads(task.project, extra.files);
+  if (up.error) return fail(up.error);
+  const args = ['resume', id];
+  if (up.dir) args.push('--attachments', up.dir);
+  if (note) args.push('--note', note);
+  return spawnSb(args, 'resume', false);
+}
+
+// ---------------------------------------------------------------- chat
+
+const failFrom = (e: unknown): LaunchResult => (e instanceof SbError ? fail(e.message, 409) : fail((e as Error).message, 500));
+
+/** Creates an empty chat for an allowed project. */
+export async function newChatFromDashboard(cfg: SwitchboardConfig, projectInput: string, mode: string): Promise<LaunchResult & { chatId?: string }> {
+  const project = matchAllowedProject(cfg, projectInput);
+  if (!project) return fail('Цей проєкт не дозволений.');
+  if (mode !== 'auto' && mode !== 'claude' && mode !== 'agy') return fail('Невідомий режим чату.');
+  try {
+    const chat = await createChat({ project, mode });
+    return { ok: true, message: 'Новий чат створено.', chatId: chat.id };
+  } catch (e) {
+    return failFrom(e);
+  }
+}
+
+export function setChatModeFromDashboard(chatId: string, mode: string): LaunchResult {
+  if (!readState().chats[chatId]) return fail('Чату не існує.', 404);
+  if (mode !== 'auto' && mode !== 'claude' && mode !== 'agy') return fail('Невідомий режим чату.');
+  setChatMode(chatId, mode as 'auto' | AgentId);
+  return { ok: true, message: 'Режим змінено.' };
+}
+
+/** Adds the user's message (with files) and starts a detached `sb chat-turn` for it. */
+export async function sendChatMessage(cfg: SwitchboardConfig, chatId: string, text: string, files?: IncomingFile[]): Promise<LaunchResult> {
+  const chat = readState().chats[chatId];
+  if (!chat) return fail('Чату не існує.', 404);
+  if (!matchAllowedProject(cfg, chat.project)) return fail('Проєкт чату недоступний.', 409);
+  if (chat.status === 'running') return fail('Агент ще відповідає.', 409);
+  if (busyWith(chat.project, chatId)) return fail('У цьому проєкті вже виконується задача або інший чат.', 409);
+  const up = await storeUploads(chat.project, files);
+  if (up.error) return fail(up.error);
+  try {
+    addUserMessage(chatId, { text, attachmentsDir: up.dir });
+  } catch (e) {
+    return failFrom(e);
+  }
+  const r = await spawnSb(['chat-turn', chatId], 'chat', false);
+  return r.ok && up.notes.length ? { ...r, message: `${r.message} Не прийнято: ${up.notes.join('; ')}` } : r;
+}
+
+/** Starts the turn for a message that is still pending (e.g. after "waiting for a limit reset"). */
+export async function retryChat(cfg: SwitchboardConfig, chatId: string): Promise<LaunchResult> {
+  const chat = readState().chats[chatId];
+  if (!chat) return fail('Чату не існує.', 404);
+  if (!matchAllowedProject(cfg, chat.project)) return fail('Проєкт чату недоступний.', 409);
+  if (chat.status === 'running') return fail('Агент ще відповідає.', 409);
+  if (busyWith(chat.project, chatId)) return fail('У цьому проєкті вже виконується задача або інший чат.', 409);
+  if (!chat.messages.some((m) => m.role === 'user' && m.status === 'pending')) return fail('Немає повідомлення, що чекає.', 409);
+  return spawnSb(['chat-turn', chatId], 'chat', false);
 }
 
 /** True when `pid` is one of our `sb` processes (never signal an arbitrary process). */
@@ -149,3 +219,13 @@ export function stopTask(id: string): LaunchResult {
   return { ok: true, message: 'Зупиняю задачу: робота збережеться чекпойнтом у гілці.' };
 }
 
+
+export function stopChat(chatId: string): LaunchResult {
+  const chat = readState().chats[chatId];
+  if (!chat) return fail('Чату не існує.', 404);
+  if (chat.status !== 'running' || !chat.pid) return fail('Агент зараз не відповідає.', 409);
+  if (!isSbProcess(chat.pid)) return fail('Процес чату не знайдено (вже завершився).', 409);
+  // sb handles SIGTERM: it stops the agent, restores agy rules and commits a checkpoint.
+  process.kill(chat.pid, 'SIGTERM');
+  return { ok: true, message: 'Зупиняю відповідь: зміни збережуться в гілці чату.' };
+}

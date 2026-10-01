@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig } from '../packages/core/config';
-import { isSbProcess, launchTask, resumeFromDashboard, stopTask, validateLaunch } from '../packages/core/launch';
+import { getChatOverview, selectChat } from '../packages/core/chat-overview';
+import { isSbProcess, launchTask, newChatFromDashboard, resumeFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, stopChat, stopTask, validateLaunch } from '../packages/core/launch';
+import { renderMarkdown } from '../packages/core/markdown';
 import { addProject, readState, saveRun, saveTask } from '../packages/core/store';
 import { allowedProjects, getTasksOverview, matchAllowedProject, tailFile } from '../packages/core/task-overview';
 import type { Task } from '../packages/core/types';
@@ -269,5 +271,113 @@ describe('tailFile', () => {
     const t = tailFile(f, 3);
     expect(t).toEqual(['row 19997', 'row 19998', 'row 19999']);
     expect(tailFile(join(dir, 'missing.log'))).toEqual([]);
+  });
+});
+
+describe('chat from the dashboard code', () => {
+  const load = async () => parseConfig((await import('node:fs')).readFileSync(process.env.SB_CONFIG!, 'utf8'));
+
+  it('creates a chat, sends a message with a file, shows the reply and switches the agent', async () => {
+    process.env.SB_CONFIG = writeConfig('chat');
+    const cfg = await load();
+    const created = await newChatFromDashboard(cfg, project, 'auto');
+    expect(created.ok).toBe(true);
+    const chatId = (created as { chatId?: string }).chatId!;
+
+    const sent = await sendChatMessage(cfg, chatId, 'Зроби **футер**', [{ name: 'brief.txt', data: Buffer.from('color #123456') }]);
+    expect(sent.ok).toBe(true);
+    await waitFor(() => (readState().chats[chatId]?.messages.filter((m) => m.role === 'agent').length ?? 0) === 1);
+    const overview = getChatOverview(project)!;
+    expect(overview.active!.id).toBe(chatId);
+    expect(overview.active!.status).toBe('idle');
+    const reply = overview.active!.messages.find((m) => m.role === 'agent')!;
+    expect(reply.html).toContain('<p>');
+    expect(reply.files).toEqual(['chat/claude.txt']);
+    expect(overview.active!.messages[0]!.attachments).toEqual([{ name: 'brief.txt', kind: 'text' }]);
+
+    expect(setChatModeFromDashboard(chatId, 'agy').ok).toBe(true);
+    expect(setChatModeFromDashboard(chatId, 'gpt').ok).toBe(false);
+    const second = await sendChatMessage(cfg, chatId, 'продовж');
+    expect(second.ok).toBe(true);
+    await waitFor(() => (readState().chats[chatId]?.messages.filter((m) => m.role === 'agent').length ?? 0) === 2);
+    expect(readState().chats[chatId]!.messages.filter((m) => m.role === 'agent')[1]!.agent).toBe('agy');
+
+    // a second chat can be selected and the list holds both
+    const other = await newChatFromDashboard(cfg, project, 'claude');
+    expect(selectChat(chatId)).toBe(true);
+    expect(getChatOverview(project)!.chats).toHaveLength(2);
+    expect(getChatOverview(project)!.active!.id).toBe(chatId);
+    expect(other.ok).toBe(true);
+    expect(execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim()).toBe('main');
+  }, 90_000);
+
+  it('refuses a project that is not allowed, a missing chat and a stop without a running turn', async () => {
+    process.env.SB_CONFIG = writeConfig('chat');
+    const cfg = await load();
+    expect((await newChatFromDashboard(cfg, '/etc', 'auto')).ok).toBe(false);
+    expect((await sendChatMessage(cfg, 'c-nope', 'x')).ok).toBe(false);
+    expect(stopChat('c-nope').ok).toBe(false);
+    const created = await newChatFromDashboard(cfg, project, 'auto');
+    const chatId = (created as { chatId?: string }).chatId!;
+    expect(stopChat(chatId).ok).toBe(false);
+    expect((await retryChat(cfg, chatId)).ok).toBe(false); // nothing pending
+  });
+
+  it('stop: SIGTERM keeps the edits and frees the chat', async () => {
+    process.env.SB_CONFIG = writeConfig('hang');
+    const cfg = await load();
+    const chatId = ((await newChatFromDashboard(cfg, project, 'claude')) as { chatId?: string }).chatId!;
+    expect((await sendChatMessage(cfg, chatId, 'щось довге')).ok).toBe(true);
+    await waitFor(() => readState().chats[chatId]?.status === 'running' && !!readState().chats[chatId]?.pid);
+    expect((await sendChatMessage(cfg, chatId, 'ще')).ok).toBe(false); // busy
+    expect(getChatOverview(project)!.active!.canStop).toBe(true);
+    expect(stopChat(chatId).ok).toBe(true);
+    await waitFor(() => readState().chats[chatId]?.status === 'idle');
+    const messages = readState().chats[chatId]!.messages;
+    expect(messages[0]!.status).toBe('failed');
+    expect(messages.at(-1)!.text).toMatch(/Зупинено/);
+  }, 60_000);
+
+  it('frees a chat whose process died', async () => {
+    const cfg = parseConfig(`agents: { claude: { cmd: c }, agy: { cmd: a } }\ndashboard: { projects: ["${project}"] }`);
+    const created = await newChatFromDashboard(cfg, project, 'auto');
+    const chatId = (created as { chatId?: string }).chatId!;
+    const { updateChat } = await import('../packages/core/store');
+    updateChat(chatId, (c) => { c.status = 'running'; c.pid = 2_000_000_000; c.messages.push({ id: 'm1', role: 'user', text: 'x', at: new Date().toISOString(), status: 'running' }); });
+    const o = getChatOverview(project)!;
+    expect(o.active!.status).toBe('idle');
+    expect(o.active!.messages.at(-1)!.text).toMatch(/Процес відповіді зник/);
+  });
+});
+
+describe('task launch with files and a clarification', () => {
+  it('passes uploaded files to the task and a note on resume', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    const fs = await import('node:fs');
+    const cfg = parseConfig(fs.readFileSync(process.env.SB_CONFIG, 'utf8'));
+    const r = await launchTask(cfg, { text: 'Create Footer.astro', type: 'section', project }, [{ name: 'brief.txt', data: Buffer.from('x') }, { name: 'virus.exe', data: Buffer.from('x') }]);
+    expect(r.ok).toBe(true);
+    const id = r.ok ? r.taskId! : '';
+    await waitFor(() => readState().tasks[id]?.status === 'done');
+    expect(readState().tasks[id]!.attachments?.map((a) => a.name)).toEqual(['brief.txt']);
+    expect(r.ok && r.message).toMatch(/Не прийнято: virus\.exe/);
+
+    const onlyBad = await launchTask(cfg, { text: 'Another', type: 'section', project }, [{ name: 'virus.exe', data: Buffer.from('x') }]);
+    expect(onlyBad.ok).toBe(false);
+  }, 60_000);
+});
+
+describe('markdown rendering', () => {
+  it('escapes raw HTML first and renders only a small safe subset', () => {
+    const html = renderMarkdown('# Title\n<script>alert(1)</script> **bold** and `code <b>`\n- one\n- two\n[link](https://example.com) [bad](javascript:alert(1))\n```\n<img src=x onerror=alert(1)>\n```');
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('<strong>bold</strong>');
+    expect(html).toContain('<code>code &lt;b&gt;</code>');
+    expect(html).toContain('<ul>');
+    expect(html).toContain('<a href="https://example.com" target="_blank" rel="noopener noreferrer">link</a>');
+    expect(html).not.toContain('href="javascript');
+    expect(html).toContain('<pre>');
   });
 });

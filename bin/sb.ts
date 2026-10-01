@@ -6,6 +6,7 @@ import { installHook, uninstallHook } from '../packages/core/hook-install';
 import { loadConfig } from '../packages/core/config';
 import { runDashboard } from '../packages/core/dashboard';
 import { resumeTask, SbError, startTask, type StartResult } from '../packages/core/flow';
+import { addUserMessage, createChat, runChatTurn, setChatMode } from '../packages/core/chat';
 import { initProject } from '../packages/core/init';
 import { notify } from '../packages/core/notify';
 import { getOverview } from '../packages/core/overview';
@@ -26,6 +27,8 @@ const HELP = `Switchboard
                                [--figma <url>] [--timeout <хв>] [--reviews <id задачі>] [--no-handoff]
                                запустити задачу в гілці sb/<id>. Без --agent агента обирає роутер за
                                лімітами; при ліміті задача передається іншому агентові. main і деплой за тобою.
+  chat "<повідомлення>" --project <папка> [--agent claude|agy|auto] [--new] [--attachments <dir>]
+                               чат з агентом у терміналі (та сама розмова, що в дашборді; правки йдуть у гілку sb/c-…)
   queue [--run-due]            список задач; --run-due продовжує ті, що чекали скидання ліміту й уже можуть іти
   resume <id> [--agent ...] [--note "відповідь агенту"]   продовжити задачу, що чекає, заблокована або впала
   unblock claude|agy           зняти позначку «ліміт вичерпано» (якщо вона хибна)
@@ -180,6 +183,35 @@ async function queue(argv: string[]): Promise<number> {
   return 0;
 }
 
+async function chatCommand(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { project: { type: 'string' }, agent: { type: 'string' }, new: { type: 'boolean' }, attachments: { type: 'string' } },
+  });
+  const text = positionals.join(' ').trim();
+  if (!text || !values.project) {
+    console.error('Використання: sb chat "<повідомлення>" --project <папка> [--agent claude|agy|auto] [--new]');
+    return 2;
+  }
+  if (values.agent && !['claude', 'agy', 'auto'].includes(values.agent)) throw new SbError('--agent: claude, agy або auto', 2);
+  const { realpathSync } = await import('node:fs');
+  const project = realpathSync(values.project.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'));
+  const state = readState();
+  const activeId = state.activeChats[project];
+  let chat = !values.new && activeId ? state.chats[activeId] : undefined;
+  if (!chat) chat = await createChat({ project, mode: (values.agent as 'auto' | AgentId | undefined) ?? 'auto' });
+  else if (values.agent) setChatMode(chat.id, values.agent as 'auto' | AgentId);
+  addUserMessage(chat.id, { text, attachmentsDir: values.attachments });
+  const r = await runChatTurn(chat.id, loadConfig(), (line) => console.log(line));
+  const reply = r.chat.messages.filter((m) => m.role !== 'user').slice(-1)[0];
+  if (r.waiting) console.log(`\n⏸ ${r.waiting.reason}`);
+  else if (reply) console.log(`\n${reply.agent ? `[${reply.agent}] ` : ''}${reply.text}`);
+  if (r.files.length) console.log(`\nзміни: ${r.files.join(', ')}  (гілка ${r.chat.branch})`);
+  for (const w of r.warnings) console.log(`! ${w}`);
+  return r.ok ? 0 : r.waiting ? 4 : 1;
+}
+
 async function main(): Promise<number> {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
@@ -207,6 +239,15 @@ async function main(): Promise<number> {
       return run(rest);
     case 'queue':
       return queue(rest);
+    case 'chat':
+      return chatCommand(rest);
+    case 'chat-turn': {
+      // Internal: the dashboard spawns this for a pending chat message.
+      const id = rest[0];
+      if (!id) return 2;
+      const r = await runChatTurn(id, loadConfig(), (line) => console.log(line));
+      return r.ok ? 0 : r.waiting ? 4 : 1;
+    }
     case 'resume':
       return resume(rest);
     case 'project': {

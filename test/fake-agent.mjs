@@ -18,17 +18,21 @@ const prompt = args[0] === '-p' ? args[1] ?? '' : '';
 const mode = process.env.FAKE_AGENT_MODE ?? 'success';
 const style = process.env.FAKE_AGENT_STYLE ?? 'claude';
 const taskId = /Task id: (t-[\w-]+)/.exec(prompt)?.[1] ?? 'unknown';
+// Session continuity (chat): --resume <id> (claude) / --conversation <id> (agy).
+const resumeId = args[args.indexOf(style === 'agy' ? '--conversation' : '--resume') + 1];
+const hasSession = args.includes(style === 'agy' ? '--conversation' : '--resume');
 if (process.env.FAKE_PROMPT_DUMP) appendFileSync(process.env.FAKE_PROMPT_DUMP, `=== ${style}\n${prompt}\n`);
 
+const sessionOut = hasSession ? resumeId : `${style}-${Math.random().toString(36).slice(2, 8)}`;
 function report({ ok = true, denied = [], text = 'done' }) {
   if (style === 'agy') {
     console.log(JSON.stringify({
-      conversation_id: 'fake', status: 'SUCCESS', response: text, duration_seconds: 0.1,
+      conversation_id: sessionOut, status: 'SUCCESS', response: text, duration_seconds: 0.1,
       denied_actions: denied.map((d) => ({ action: d.toLowerCase(), display_name: d })),
     }));
   } else {
     console.log(JSON.stringify({
-      type: 'result', subtype: 'success', is_error: !ok, result: text, num_turns: 2,
+      type: 'result', subtype: 'success', is_error: !ok, result: text, num_turns: 2, session_id: sessionOut,
       permission_denials: denied.map((d) => ({ tool_name: d, tool_input: {} })),
     }));
   }
@@ -69,6 +73,16 @@ switch (mode) {
     writeProgress();
     report({ text: `Created Footer.astro. (${prompt.split('\n').find((l) => /quota|rate limit/i.test(l)) ?? 'ok'})`, denied: [...new Set(denied)] });
     break;
+  case 'chat': {
+    // Chat turn: edits a file named after the agent and answers with the user's message, the session
+    // state ("new" / "resumed") and whether a transcript of earlier messages was included.
+    const msg = (prompt.split('USER MESSAGE:\n\n')[1] ?? prompt).split('\n')[0];
+    mkdirSync('chat', { recursive: true });
+    appendFileSync(`chat/${style}.txt`, `${msg}\n`);
+    const transcript = prompt.includes('Conversation so far') ? 'transcript' : 'no-transcript';
+    report({ text: `echo(${style}): ${msg} [${hasSession ? 'resumed' : 'new'}, ${transcript}]` });
+    break;
+  }
   case 'protected':
     writeWork();
     writeProgress();
