@@ -9,10 +9,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field, FieldLabel } from '@/components/ui/field';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
-import { post, type ActionResult } from '@/lib/api';
+import { post, type OnResult } from '@/lib/api';
 import { AttachButton, AttachChips, dropHandlers } from './AttachPicker';
 
-type Props = { task: TaskView; rules: UploadRules; onResult: (r: ActionResult) => void; reload: () => Promise<void> };
+type Props = { task: TaskView; rules: UploadRules; onResult: OnResult; reload: () => Promise<void> };
 
 export function ResumeDialog({ task, rules, onResult, reload }: Props) {
   const [open, setOpen] = useState(false);
@@ -22,13 +22,17 @@ export function ResumeDialog({ task, rules, onResult, reload }: Props) {
   const problem = (message: string) => onResult({ ok: false, error: message });
   const drop = dropHandlers({ files, rules, onChange: setFiles, onProblem: problem });
 
-  const submit = async () => {
-    setBusy(true);
+  const resume = async () => {
     const r = await post('/api/task-action', { op: 'resume', id: task.id, note }, files);
-    onResult(r);
-    setBusy(false);
+    onResult(r, () => void resume());
     if (r.ok) { setOpen(false); setNote(''); setFiles([]); }
     await reload();
+  };
+
+  const submit = async () => {
+    setBusy(true);
+    await resume();
+    setBusy(false);
   };
 
   return (

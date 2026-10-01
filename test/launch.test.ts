@@ -1,12 +1,12 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig } from '../packages/core/config';
 import { getChatOverview, selectChat } from '../packages/core/chat-overview';
-import { isSbProcess, launchTask, newChatFromDashboard, resumeFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, stopChat, stopTask, validateLaunch } from '../packages/core/launch';
+import { isSbProcess, launchTask, newChatFromDashboard, resumeFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, stashProjectChanges, stopChat, stopTask, validateLaunch } from '../packages/core/launch';
 import { renderMarkdown } from '../packages/core/markdown';
 import { addProject, readState, saveRun, saveTask } from '../packages/core/store';
 import { allowedProjects, getTasksOverview, matchAllowedProject, tailFile } from '../packages/core/task-overview';
@@ -201,6 +201,84 @@ describe('launching real sb processes from the dashboard code', () => {
     const cfg = parseConfig(`agents: { claude: { cmd: c }, agy: { cmd: a } }\ndashboard: { projects: ["${project}"] }`);
     const r = await resumeFromDashboard(cfg, 't-nope');
     expect(r.ok).toBe(false);
+  });
+});
+
+describe('a dirty working tree is resolved from the dashboard', () => {
+  const cfg = () => parseConfig(readFileSync(process.env.SB_CONFIG!, 'utf8'));
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: project, encoding: 'utf8' }).trim();
+
+  it('reports the files instead of starting a task', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    writeFileSync(join(project, 'notes.txt'), 'uncommitted');
+    writeFileSync(join(project, 'README.md'), '# changed\n');
+    const before = Object.keys(readState().tasks).length;
+    const r = await launchTask(cfg(), { text: 'Create Footer.astro', type: 'section', project });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.status).toBe(409);
+    expect(r.blocked?.project).toBe(project);
+    expect(r.blocked?.files.map((l) => l.trim().split(/\s+/).pop()).sort()).toEqual(['README.md', 'notes.txt']);
+    expect(Object.keys(readState().tasks).length).toBe(before);
+  });
+
+  it('a blocked chat message is not stored, so no stale pending message is left', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    const created = await newChatFromDashboard(cfg(), project, 'auto');
+    const chatId = created.ok ? created.chatId! : '';
+    writeFileSync(join(project, 'notes.txt'), 'uncommitted');
+    const r = await sendChatMessage(cfg(), chatId, 'привіт');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.blocked?.files).toEqual(['?? notes.txt']);
+    expect(readState().chats[chatId]!.messages).toHaveLength(0);
+  });
+
+  it('stash moves user changes (tracked and untracked) aside, keeps .sb/ and is recoverable', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    writeFileSync(join(project, 'notes.txt'), 'my notes');
+    writeFileSync(join(project, 'README.md'), '# changed\n');
+    mkdirSync(join(project, '.sb', 'tasks'), { recursive: true });
+    writeFileSync(join(project, '.sb', 'tasks', 't-old.md'), 'stale');
+    const r = await stashProjectChanges(cfg(), project);
+    expect(r.ok).toBe(true);
+    expect(git('status', '--porcelain')).toBe('?? .sb/');
+    expect(existsSync(join(project, 'notes.txt'))).toBe(false);
+    expect(existsSync(join(project, '.sb', 'tasks', 't-old.md'))).toBe(true);
+    expect(git('stash', 'list')).toContain('sb: auto-stash');
+    // nothing is lost: pop brings everything back
+    git('stash', 'pop');
+    expect(readFileSync(join(project, 'notes.txt'), 'utf8')).toBe('my notes');
+    expect(readFileSync(join(project, 'README.md'), 'utf8')).toBe('# changed\n');
+  });
+
+  it('untracked .DS_Store files never block, and are left alone by the stash', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    writeFileSync(join(project, '.DS_Store'), 'x');
+    // inside a tracked folder git lists the file itself (a brand-new folder would be collapsed to "sub/")
+    mkdirSync(join(project, 'sub'));
+    writeFileSync(join(project, 'sub', 'a.txt'), 'a');
+    git('add', 'sub/a.txt');
+    git('commit', '-q', '-m', 'add sub');
+    writeFileSync(join(project, 'sub', '.DS_Store'), 'x');
+    expect(await stashProjectChanges(cfg(), project)).toMatchObject({ ok: true, message: 'Дерево вже чисте.' });
+    writeFileSync(join(project, 'notes.txt'), 'mine');
+    const r = await stashProjectChanges(cfg(), project);
+    expect(r.ok).toBe(true);
+    expect(existsSync(join(project, 'notes.txt'))).toBe(false);
+    expect(existsSync(join(project, '.DS_Store'))).toBe(true);
+    expect(existsSync(join(project, 'sub', '.DS_Store'))).toBe(true);
+  });
+
+  it('stash on a clean tree is a no-op, and it refuses projects that are not allowed', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    const clean = await stashProjectChanges(cfg(), project);
+    expect(clean).toMatchObject({ ok: true, message: 'Дерево вже чисте.' });
+    expect(git('stash', 'list')).toBe('');
+    const other = makeRepo('other');
+    writeFileSync(join(other, 'x.txt'), 'x');
+    const r = await stashProjectChanges(cfg(), other);
+    expect(r.ok).toBe(false);
+    expect(existsSync(join(other, 'x.txt'))).toBe(true);
   });
 });
 

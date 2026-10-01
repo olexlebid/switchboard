@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { saveAttachments, type IncomingFile } from './attachments';
 import { addUserMessage, busyWith, createChat, setChatMode } from './chat';
 import { SbError } from './errors';
+import { blockingDirtyFiles, currentBranch, stashDirty, summarizeDirty } from './git';
 import { defaultConfigPath } from './config';
 import { maskSecrets } from './mask';
 import { readState, runsDir } from './store';
@@ -21,7 +22,10 @@ export type LaunchInput = {
   figma?: string;
 };
 
-export type LaunchResult = { ok: true; message: string; taskId?: string } | { ok: false; error: string; status: number };
+/** The user's uncommitted files that stop a task or chat from starting (the dashboard offers to stash them). */
+export type BlockedTree = { project: string; files: string[] };
+
+export type LaunchResult = { ok: true; message: string; taskId?: string } | { ok: false; error: string; status: number; blocked?: BlockedTree };
 
 const MAX_TEXT = 5000;
 const fail = (error: string, status = 400): LaunchResult => ({ ok: false, error, status });
@@ -69,6 +73,22 @@ function sbCommand(args: string[]): { cmd: string; args: string[]; cwd: string }
 
 /** Is a task or a chat of this project running right now? (one working tree, one agent at a time) */
 const projectBusy = (project: string): boolean => busyWith(project) !== undefined;
+
+/**
+ * Pre-flight for the dirty working tree, so the dashboard gets the file list instead of a bare error text.
+ * `ownBranch`: a chat that is already on its own branch does not need a clean tree.
+ */
+async function treeBlock(project: string, ownBranch?: string): Promise<LaunchResult | undefined> {
+  try {
+    if (ownBranch && (await currentBranch(project)) === ownBranch) return undefined;
+    const files = await blockingDirtyFiles(project);
+    if (files.length === 0) return undefined;
+    const error = `Робоче дерево проєкту не чисте (${files.length} змін: ${summarizeDirty(files)}).`;
+    return { ok: false, error, status: 409, blocked: { project, files } };
+  } catch {
+    return undefined; // real git trouble (detached HEAD...) is reported by `sb` itself
+  }
+}
 
 /** Spawns a detached `sb` and waits briefly to report an immediate failure (dirty tree, bad input...). */
 async function spawnSb(args: string[], label: string, waitForNewTask: boolean): Promise<LaunchResult> {
@@ -123,6 +143,8 @@ export async function launchTask(cfg: SwitchboardConfig, input: LaunchInput, fil
   const v = validateLaunch(cfg, input);
   if ('error' in v) return fail(v.error);
   if (projectBusy(v.project)) return fail('У цьому проєкті вже виконується задача або чат. Дочекайся завершення.', 409);
+  const blocked = await treeBlock(v.project);
+  if (blocked) return blocked;
   const up = await storeUploads(v.project, files);
   if (up.error) return fail(up.error);
   const args = up.dir ? [...v.args.slice(0, v.args.indexOf('--')), '--attachments', up.dir, ...v.args.slice(v.args.indexOf('--'))] : v.args;
@@ -140,6 +162,8 @@ export async function resumeFromDashboard(
   if (!['waiting', 'blocked', 'failed'].includes(task.status)) return fail('Цю задачу не можна продовжити в поточному стані.', 409);
   if (!matchAllowedProject(cfg, task.project)) return fail('Проєкт задачі недоступний.', 409);
   if (projectBusy(task.project)) return fail('У цьому проєкті вже виконується задача або чат.', 409);
+  const blocked = await treeBlock(task.project);
+  if (blocked) return blocked;
   const note = (extra.note ?? '').replace(/\r\n/g, '\n').trim();
   if (note.length > MAX_TEXT) return fail(`Відповідь задовга (максимум ${MAX_TEXT} символів).`);
   const up = await storeUploads(task.project, extra.files);
@@ -181,6 +205,9 @@ export async function sendChatMessage(cfg: SwitchboardConfig, chatId: string, te
   if (!matchAllowedProject(cfg, chat.project)) return fail('Проєкт чату недоступний.', 409);
   if (chat.status === 'running') return fail('Агент ще відповідає.', 409);
   if (busyWith(chat.project, chatId)) return fail('У цьому проєкті вже виконується задача або інший чат.', 409);
+  // Checked before the message is stored, so a blocked send leaves no stale "pending" message behind.
+  const blocked = await treeBlock(chat.project, chat.branch);
+  if (blocked) return blocked;
   const up = await storeUploads(chat.project, files);
   if (up.error) return fail(up.error);
   try {
@@ -200,7 +227,28 @@ export async function retryChat(cfg: SwitchboardConfig, chatId: string): Promise
   if (chat.status === 'running') return fail('Агент ще відповідає.', 409);
   if (busyWith(chat.project, chatId)) return fail('У цьому проєкті вже виконується задача або інший чат.', 409);
   if (!chat.messages.some((m) => m.role === 'user' && m.status === 'pending')) return fail('Немає повідомлення, що чекає.', 409);
+  const blocked = await treeBlock(chat.project, chat.branch);
+  if (blocked) return blocked;
   return spawnSb(['chat-turn', chatId], 'chat', false);
+}
+
+/**
+ * "Stash and continue": moves the user's uncommitted changes aside (`git stash`, recoverable) so the blocked
+ * action can be repeated. Only for allowed projects and only while nothing runs in the project.
+ */
+export async function stashProjectChanges(cfg: SwitchboardConfig, projectInput: string): Promise<LaunchResult> {
+  const project = matchAllowedProject(cfg, projectInput);
+  if (!project) return fail('Цей проєкт не дозволений.');
+  if (projectBusy(project)) return fail('У цьому проєкті зараз працює агент: дочекайся завершення.', 409);
+  try {
+    const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const before = (await blockingDirtyFiles(project)).length;
+    const stashed = await stashDirty(project, `sb: auto-stash before agent run ${stamp}`);
+    if (!stashed) return { ok: true, message: 'Дерево вже чисте.' };
+    return { ok: true, message: `Відкладено ${before} змін у git stash. Повернути пізніше: git stash pop (у теці проєкту).` };
+  } catch (e) {
+    return failFrom(e);
+  }
 }
 
 /** True when `pid` is one of our `sb` processes (never signal an arbitrary process). */

@@ -12,6 +12,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useDashboard, useNow, useStoredString } from '@/hooks/use-dashboard';
 import { post, type ActionResult } from '@/lib/api';
+import { DirtyTreeDialog, type Blocked } from './DirtyTreeDialog';
 import { AgentCard } from './AgentCard';
 import { ChatPanel } from './ChatPanel';
 import { ManualMarks } from './ManualMarks';
@@ -28,12 +29,19 @@ export default function App() {
   const now = useNow(15_000);
   const [notice, setNotice] = useState<ActionResult>();
   const [refreshing, setRefreshing] = useState(false);
+  const [blocked, setBlocked] = useState<Blocked>();
   const noticeTimer = useRef<number>(undefined);
 
   const projects = state?.tasks.projects ?? [];
   const project = useMemo(() => projects.find((p) => p.path === stored) ?? projects[0], [projects, stored]);
 
-  const show = (r: ActionResult) => {
+  const show = (r: ActionResult, retry?: () => void) => {
+    // A dirty working tree is resolved in a dialog (stash + repeat) instead of a bare error line.
+    if (!r.ok && r.blocked) {
+      const name = projects.find((p) => p.path === r.blocked!.project)?.name ?? r.blocked.project;
+      setBlocked({ project: r.blocked.project, projectName: name, files: r.blocked.files, retry });
+      return;
+    }
     const text = r.ok ? r.message : r.error;
     if (!text) return;
     setNotice(r);
@@ -122,6 +130,8 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        <DirtyTreeDialog blocked={blocked} onClose={() => setBlocked(undefined)} onResult={show} reload={reloadAsync} />
 
         <ManualMarks cards={state.overview.manual} onChange={(id, v) => void mark(id, v)} />
 

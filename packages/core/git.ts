@@ -1,4 +1,5 @@
 // Thin git helpers for the runner. Only safe commands: no push --force, reset --hard, merge or rebase.
+// `stash push` is the one command that moves the user's changes, and it is recoverable (`git stash pop`).
 import { runCommand } from './exec';
 
 export class GitError extends Error {}
@@ -41,12 +42,26 @@ export async function dirtyFiles(cwd: string): Promise<string[]> {
 
 /**
  * Dirty entries that should stop us from starting work on the user's tree. Untracked files under `.sb/`
- * (leftover task files and the like) are Switchboard's own service files, not the user's changes.
+ * (leftover task files and the like) are Switchboard's own service files, and untracked `.DS_Store` files are
+ * macOS noise: neither is the user's work.
  */
 export async function blockingDirtyFiles(cwd: string): Promise<string[]> {
   const r = await git(cwd, ['status', '--porcelain']);
   if (r.code !== 0) throw new GitError(`git status failed: ${(r.stderr || r.stdout).trim()}`);
-  return r.stdout.split('\n').filter((l) => l && !/^\?\? "?\.sb\//.test(l));
+  return r.stdout.split('\n').filter((l) => l && !/^\?\? "?(\.sb\/|(.*\/)?\.DS_Store"?$)/.test(l));
+}
+
+/**
+ * Stashes the user's uncommitted changes (tracked and untracked) so a task or chat can start on a clean tree.
+ * Switchboard's own `.sb/` files stay where they are. Recoverable with `git stash pop`.
+ * Returns false when there was nothing to stash.
+ */
+export async function stashDirty(cwd: string, message: string): Promise<boolean> {
+  if ((await blockingDirtyFiles(cwd)).length === 0) return false;
+  const hasIdentity = (await git(cwd, ['config', 'user.email'])).stdout.trim() !== '';
+  const identity = hasIdentity ? [] : ['-c', 'user.name=Switchboard', '-c', 'user.email=switchboard@localhost'];
+  await gitOk(cwd, [...identity, 'stash', 'push', '--include-untracked', '-m', message, '--', '.', ':(exclude).sb', ':(exclude,glob)**/.DS_Store']);
+  return true;
 }
 
 /** One-line list of dirty entries for error messages: `M src/a.ts, ?? notes.txt (+3 more)`. */

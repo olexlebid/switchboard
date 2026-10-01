@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { post, type ActionResult } from '@/lib/api';
+import { post, type ActionResult, type OnResult } from '@/lib/api';
 import { cn } from 'cn';
 import { AttachButton, AttachChips, dropHandlers } from './AttachPicker';
 
@@ -25,7 +25,7 @@ type Props = {
   chat?: ChatOverview;
   rules: UploadRules;
   now: number;
-  onResult: (r: ActionResult) => void;
+  onResult: OnResult;
   reload: () => Promise<void>;
 };
 
@@ -84,9 +84,9 @@ export function ChatPanel({ project, projectName, chat, rules, now, onResult, re
     if (el) el.scrollTop = el.scrollHeight;
   }, [lastId, running, active?.id]);
 
-  const act = async (data: Record<string, string | undefined>, sendFiles: File[] = []) => {
+  const act = async (data: Record<string, string | undefined>, sendFiles: File[] = [], retry?: () => void) => {
     const r = await post('/api/chat', data, sendFiles);
-    if (!r.ok || r.message) onResult(r);
+    if (!r.ok || r.message) onResult(r, retry);
     await reload();
     return r;
   };
@@ -101,9 +101,14 @@ export function ChatPanel({ project, projectName, chat, rules, now, onResult, re
       if (!created.ok) { onResult(created); setSending(false); return; }
       chatId = created.chatId;
     }
-    const r = await act({ op: 'send', chat: chatId, text }, files);
-    if (r.ok) { setText(''); setFiles([]); }
+    await sendTo(chatId);
     setSending(false);
+  };
+
+  // `sendTo` is also the retry after the user stashes a dirty tree: same chat, same text and files.
+  const sendTo = async (chatId: string): Promise<void> => {
+    const r = await act({ op: 'send', chat: chatId, text }, files, () => void sendTo(chatId));
+    if (r.ok) { setText(''); setFiles([]); }
   };
 
   const drop = dropHandlers({ files, rules, onChange: setFiles, onProblem: (message) => onResult({ ok: false, error: message }) });

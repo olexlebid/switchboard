@@ -11,11 +11,11 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/u
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { post, type ActionResult } from '@/lib/api';
+import { post, type OnResult } from '@/lib/api';
 import { ResumeDialog } from './ResumeDialog';
 import { StatusBadge } from './StatusBadge';
 
-type Props = { tasks: TasksOverview; rules: UploadRules; now: number; onResult: (r: ActionResult) => void; reload: () => Promise<void> };
+type Props = { tasks: TasksOverview; rules: UploadRules; now: number; onResult: OnResult; reload: () => Promise<void> };
 
 const clock = (iso: string) => new Date(iso).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' });
 const outcome = (t: TaskView) => (t.status === 'done' ? 'ok' : t.status === 'failed' ? 'bad' : 'low');

@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
-import { post, type ActionResult } from '@/lib/api';
+import { post, type OnResult } from '@/lib/api';
 import { AttachButton, AttachChips, dropHandlers } from './AttachPicker';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -27,7 +27,7 @@ type Props = {
   projectName: string;
   types: TasksOverview['types'];
   rules: UploadRules;
-  onResult: (r: ActionResult) => void;
+  onResult: OnResult;
   reload: () => Promise<void>;
 };
 
@@ -41,15 +41,19 @@ export function TaskForm({ project, projectName, types, rules, onResult, reload 
   const problem = (message: string) => onResult({ ok: false, error: message });
   const drop = dropHandlers({ files, rules, onChange: setFiles, onProblem: problem });
 
+  const launch = async () => {
+    const r = await post('/api/tasks', { text, type, priority, project, figma }, files);
+    onResult(r, () => void launch());
+    if (r.ok) { setText(''); setFigma(''); setFiles([]); }
+    await reload();
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (busy || !text.trim()) return;
     setBusy(true);
-    const r = await post('/api/tasks', { text, type, priority, project, figma }, files);
-    onResult(r);
-    if (r.ok) { setText(''); setFigma(''); setFiles([]); }
+    await launch();
     setBusy(false);
-    await reload();
   };
 
   return (
