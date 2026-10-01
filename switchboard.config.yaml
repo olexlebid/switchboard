@@ -1,0 +1,29 @@
+# Switchboard config. Order of agents in `routing` = preference.
+agents:
+  claude:
+    cmd: claude
+    headlessArgs: ["-p"]
+    usageArgs: ["-p", "/usage"]      # prints "Current session: N% used ..." (recon rows 15)
+    models: []
+  agy:
+    cmd: agy
+    headlessArgs: ["-p", "--output-format", "json"]
+    usageArgs: ["-p", "/quota"]      # prints per-group quota lines (recon row 16)
+    models: []
+
+limits:
+  staleAfterMin: 30       # data older than this is "unknown" (unless a window is exhausted)
+  fetchTimeoutSec: 30     # timeout for one usage command
+
+thresholds:               # tuned for Claude Pro (small 5h window)
+  low: 60                 # % used -> status "мало"
+  exhausted: 90           # % used -> unavailable for new tasks
+  weeklyReserve: 75       # weekly above this: only priority=high tasks
+
+routing:
+  research: [agy, claude]
+  ideas:    [agy, claude]
+  copy:     [claude, agy]
+  section:  [claude, agy]
+  review:   [agy, claude]
+  qa:       [agy, claude]

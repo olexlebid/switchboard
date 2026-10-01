@@ -1,0 +1,27 @@
+{
+  "name": "switchboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local orchestrator that routes coding tasks between Claude Code and Antigravity (agy) and hands over on usage limits.",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "sb": "./bin/sb.ts"
+  },
+  "scripts": {
+    "sb": "tsx bin/sb.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

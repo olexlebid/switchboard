@@ -1,0 +1,45 @@
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { maskEmail, maskSecrets } from '../packages/core/mask';
+import { clearExhausted, readState, saveSnapshot, sbHome, setExhausted } from '../packages/core/store';
+
+let dir: string;
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'sb-store-')); process.env.SB_HOME = dir; });
+afterEach(() => { delete process.env.SB_HOME; rmSync(dir, { recursive: true, force: true }); });
+
+describe('store', () => {
+  it('starts empty and persists snapshots with private permissions', () => {
+    expect(readState().snapshots).toEqual({});
+    saveSnapshot({ agent: 'agy', source: 'cli', capturedAt: '2026-10-01T00:00:00Z' });
+    expect(readState().snapshots.agy?.source).toBe('cli');
+    expect(statSync(join(sbHome(), 'state.json')).mode & 0o777).toBe(0o600);
+  });
+
+  it('caps history and stores/clears exhausted marks', () => {
+    for (let i = 0; i < 520; i++) saveSnapshot({ agent: 'claude', source: 'cli', capturedAt: new Date(i * 1000).toISOString() });
+    expect(readState().history).toHaveLength(500);
+    setExhausted('claude', { until: '2026-10-01T10:00:00Z', reason: 'test', since: '2026-10-01T05:00:00Z' });
+    expect(readState().exhausted.claude?.reason).toBe('test');
+    clearExhausted('claude');
+    expect(readState().exhausted.claude).toBeUndefined();
+  });
+
+  it('recovers from a corrupt state file', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(join(dir, 'state.json'), '{not json');
+    expect(readState().snapshots).toEqual({});
+  });
+});
+
+describe('mask', () => {
+  it('masks emails for the UI', () => {
+    expect(maskEmail('olexlebid@gmail.com')).toBe('ole…@gmail.com');
+    expect(maskEmail('weird')).toBe('…');
+  });
+  it('masks secrets for logs', () => {
+    const out = maskSecrets('Authorization: Bearer abc.def-123 and sk-ant-abcdefgh12345 and api_key=supersecretvalue');
+    expect(out).not.toMatch(/abc\.def|sk-ant|supersecretvalue/);
+  });
+});

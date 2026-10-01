@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.astro/
+.env
+.env.*
+# local recon reports and runtime state never go to git
+sb-recon-*.txt
+.switchboard/
+*.log
