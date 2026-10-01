@@ -118,6 +118,13 @@ export function parseConfig(text: string): SwitchboardConfig {
     },
     handoff: { maxHandoffs: num(raw.handoff?.maxHandoffs, 'handoff.maxHandoffs', 2) },
     notifications: { enabled: raw.notifications?.enabled !== false },
+    chat: {
+      order: ((): AgentId[] => {
+        const o = raw.chat?.order ?? ['claude', 'agy'];
+        if (!Array.isArray(o) || o.some((x) => !AGENT_IDS.includes(x as AgentId))) fail('chat.order must be a list of claude | agy');
+        return o as AgentId[];
+      })(),
+    },
   };
 }
 

@@ -10,9 +10,14 @@ export type Outcome = {
   summary?: string;
   /** Machine-readable problem, if any (is_error, api error, bad JSON). */
   error?: string;
+  /** The agent's own conversation id (claude session_id / agy conversation_id), to continue it later. */
+  sessionId?: string;
+  /** The complete final message (up to MAX_REPLY chars), for the chat. */
+  reply?: string;
 };
 
 const MAX_SUMMARY = 2000;
+const MAX_REPLY = 20_000;
 
 /** Last JSON object found in the text (CLIs may print notices before it). */
 export function lastJsonObject(text: string): Record<string, unknown> | undefined {
@@ -33,6 +38,9 @@ export function lastJsonObject(text: string): Record<string, unknown> | undefine
 
 const cut = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, MAX_SUMMARY) : undefined;
+const full = (v: unknown): string | undefined =>
+  typeof v === 'string' && v.trim() ? v.trim().slice(0, MAX_REPLY) : undefined;
+const sid = (v: unknown): string | undefined => (typeof v === 'string' && /^[\w.-]{4,80}$/.test(v) ? v : undefined);
 
 /** "command" or, when agy tells us what it tried, "command: ls -la" (field names are not documented). */
 function describeDenied(a: unknown): string {
@@ -59,6 +67,8 @@ export function interpretOutput(agent: AgentId, stdout: string, stderr: string):
       ok: !isError && denied.length === 0 && !apiStatus,
       denied: [...new Set(denied)],
       summary: cut(json.result),
+      reply: full(json.result),
+      sessionId: sid(json.session_id),
       error: isError ? cut(json.result) ?? 'is_error' : apiStatus ? `api error ${String(apiStatus)}` : undefined,
     };
   }
@@ -71,6 +81,8 @@ export function interpretOutput(agent: AgentId, stdout: string, stderr: string):
     ok: status === 'SUCCESS' && denied.length === 0,
     denied: [...new Set(denied)],
     summary: cut(json.response),
+    reply: full(json.response),
+    sessionId: sid(json.conversation_id),
     error: status !== 'SUCCESS' ? `status ${status || 'missing'}` : undefined,
   };
 }

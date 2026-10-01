@@ -1,14 +1,15 @@
 // One task from start to finish: pick an agent, run it on its own branch, and when it hits a usage
 // limit hand the work over to the other agent (checkpoint + continuation prompt). Never merges, never deploys.
 import { spawnSync } from 'node:child_process';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadBatch } from './attachments';
-import { AgyPermissionError, applyAgyRules, DEFAULT_AGY_SETTINGS, recoverAgyRules, type AgyRuleHandle } from './agy-permissions';
+import { runAgentOnce } from './agent-run';
+import { SbError } from './errors';
 import { onExit } from './cleanup';
 import { changedFiles, checkoutBranch, commitAll, currentBranch, dirtyFiles, headSha, isGitRepo, pushBranch, switchBack } from './git';
 import { outputTail, writeCheckpoint } from './handoff';
-import { interpretOutput, type Outcome } from './interpret';
+import type { Outcome } from './interpret';
 import { detectLimit, type LimitSignal } from './limit-detect';
 import { collectUsage } from './limits';
 import { notify as defaultNotify, type Notify } from './notify';
@@ -17,17 +18,12 @@ import { readProgress, type ProgressInfo } from './progress';
 import { protectedTouched } from './protected';
 import { buildContinuePrompt, buildStartPrompt } from './prompt';
 import { routeTask } from './router';
-import { buildAgentArgs, logPathFor, runAgentProcess, type ProcessResult } from './runner';
+import { logPathFor, type ProcessResult } from './runner';
 import { addProject, readState, saveRun, saveTask, setExhausted } from './store';
 import { newTaskId, taskTitle, writeTaskFile } from './tasks';
 import type { AgentId, Handoff, Run, SwitchboardConfig, Task, UsageSnapshot } from './types';
 
-/** An error the CLI should show as-is, with a specific exit code. */
-export class SbError extends Error {
-  constructor(message: string, readonly exitCode = 1) {
-    super(message);
-  }
-}
+export { SbError };
 
 export type StartInput = {
   text: string;
@@ -411,7 +407,6 @@ async function runAttempt(
   const timeoutMs = (timeoutMin ?? cfg.run.timeoutMin) * 60_000;
   const existing = ['RULES.md', 'DESIGN.md', 'PROGRESS.md', `.sb/tasks/${task.id}.md`].filter((f) => existsSync(resolve(project, f)));
   const prompt = continuing ? buildContinuePrompt(task, { agent, existing }, task.baseSha) : buildStartPrompt(task, { agent, existing });
-  const args = buildAgentArgs(agent, cfg.agents[agent], prompt, cfg.permissions[agent], timeoutMs);
   const logPath = logPathFor(runId);
   const run: Run = { id: runId, taskId: task.id, agent, startedAt: ctx.now().toISOString(), status: 'running', logPath };
   task.runs.push(runId);
@@ -420,57 +415,9 @@ async function runAttempt(
 
   say(`▶ ${agent}${continuing ? ' (продовження)' : ''}: ${taskTitle(task.text)}\n  гілка ${task.branch}, тайм-аут ${Math.round(timeoutMs / 60_000)} хв\n  лог: ${logPath}`);
 
-  // agy takes permissions only from its user-level settings: add a directory-scoped rule for this run.
-  let rules: AgyRuleHandle | undefined;
-  if (agent === 'agy' && cfg.permissions.agy.allow.length > 0) {
-    try {
-      const recovered = recoverAgyRules();
-      if (recovered) warnings.push(recovered);
-      const real = realpathSync(project);
-      const fill = (list: string[]) => list.map((r) => r.replaceAll('{project}', real));
-      rules = applyAgyRules({
-        settingsPath: cfg.agents.agy.settingsPath ?? DEFAULT_AGY_SETTINGS,
-        project: real,
-        allow: fill(cfg.permissions.agy.allow),
-        deny: fill(cfg.permissions.agy.deny),
-      });
-      say(`  agy: тимчасовий дозвіл на запис лише в ${real}/ (знімається після запуску)`);
-    } catch (e) {
-      if (e instanceof AgyPermissionError) throw new SbError(e.message, 3);
-      throw e;
-    }
-  }
-
-  let proc: ProcessResult;
-  try {
-    proc = await runAgentProcess({
-      cmd: cfg.agents[agent].cmd,
-      args,
-      cwd: project,
-      timeoutMs,
-      logPath,
-      logHeader: `[switchboard] ${ctx.now().toISOString()} task=${task.id} agent=${agent} branch=${task.branch}${continuing ? ' (continuation)' : ''}\n[switchboard] ${cfg.agents[agent].cmd} ${args.map((a) => (a === prompt ? '<prompt>' : a)).join(' ')}`,
-    });
-  } finally {
-    // Always take the temporary agy rules away again, also after a timeout or an error.
-    if (rules) {
-      try {
-        rules.restore();
-      } catch (e) {
-        warnings.push(`Не вдалося зняти тимчасові правила agy: ${(e as Error).message}`);
-      }
-    }
-  }
-
-  const outcome: Outcome = proc.spawnError
-    ? { ok: false, denied: [], error: `cannot run "${cfg.agents[agent].cmd}": ${proc.spawnError}` }
-    : proc.timedOut
-      ? { ok: false, denied: [], error: `timeout after ${Math.round(timeoutMs / 60_000)} min` }
-      : interpretOutput(agent, proc.stdout, proc.stderr);
-  // A non-zero exit with an otherwise clean result is still a failure.
-  if (outcome.ok && proc.code !== 0) {
-    outcome.ok = false;
-    outcome.error = `exit code ${proc.code}`;
-  }
+  const { proc, outcome } = await runAgentOnce({
+    cfg, agent, project, prompt, runId, timeoutMs, say, warnings, now: ctx.now,
+    logNote: `task=${task.id} branch=${task.branch}${continuing ? ' (continuation)' : ''}`,
+  });
   return { run, proc, outcome };
 }

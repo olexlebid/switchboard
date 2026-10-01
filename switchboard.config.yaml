@@ -120,3 +120,6 @@ handoff:
 
 notifications:
   enabled: true           # macOS system notification on pause (osascript)
+
+chat:
+  order: [claude, agy]    # which agent answers first in "Авто" mode (a chat keeps its last agent while it has room)

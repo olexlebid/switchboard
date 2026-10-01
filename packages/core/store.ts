@@ -3,7 +3,7 @@
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { AgentId, ExhaustedMark, Run, Task, UsageSnapshot } from './types';
+import type { AgentId, Chat, ExhaustedMark, Run, Task, UsageSnapshot } from './types';
 
 export type State = {
   version: 1;
@@ -17,6 +17,9 @@ export type State = {
   projects: string[];
   tasks: Record<string, Task>;
   runs: Record<string, Run>;
+  chats: Record<string, Chat>;
+  /** project path -> id of the chat shown in the dashboard */
+  activeChats: Record<string, string>;
   /** Slow-changing facts cached between refreshes. */
   meta: { agyModels?: { count: number; at: string } };
 };
@@ -32,7 +35,7 @@ function statePath(): string {
 }
 
 function emptyState(): State {
-  return { version: 1, snapshots: {}, history: [], exhausted: {}, manual: {}, projects: [], tasks: {}, runs: {}, meta: {} };
+  return { version: 1, snapshots: {}, history: [], exhausted: {}, manual: {}, projects: [], tasks: {}, runs: {}, chats: {}, activeChats: {}, meta: {} };
 }
 
 export function readState(): State {
@@ -149,4 +152,24 @@ export function removeProject(path: string): boolean {
     removed = s.projects.length < before;
   });
   return removed;
+}
+
+/** Atomically changes one chat (the dashboard and the turn process both write chats). */
+export function updateChat(id: string, fn: (chat: Chat) => void): Chat | undefined {
+  let result: Chat | undefined;
+  updateState((s) => {
+    const chat = s.chats[id];
+    if (!chat) return;
+    fn(chat);
+    chat.updatedAt = new Date().toISOString();
+    result = chat;
+  });
+  return result;
+}
+
+export function saveChat(chat: Chat): void {
+  updateState((s) => {
+    s.chats[chat.id] = { ...chat, updatedAt: new Date().toISOString() };
+    s.activeChats[chat.project] = chat.id;
+  });
 }

@@ -60,6 +60,8 @@ export function buildAgentArgs(
   prompt: string,
   rules: PermissionRules & { args: string[] },
   timeoutMs: number,
+  /** Resume this agent-side conversation (chat turns after the first). */
+  sessionId?: string,
 ): string[] {
   const [flag, ...rest] = cfg.headlessArgs;
   const args = [flag!, prompt, ...rest];
@@ -70,6 +72,7 @@ export function buildAgentArgs(
     // agy stops by itself when the print timeout is reached; ours is a hard backstop.
     args.push('--print-timeout', `${Math.max(1, Math.floor(timeoutMs / 1000))}s`);
   }
+  if (sessionId) args.push(agent === 'claude' ? '--resume' : '--conversation', sessionId);
   return [...args, ...rules.args];
 }
 

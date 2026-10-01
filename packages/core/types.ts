@@ -113,6 +113,41 @@ export type Run = {
   summary?: string;
 };
 
+export type ChatMessage = {
+  id: string;
+  role: 'user' | 'agent' | 'system';
+  text: string;
+  at: string;
+  agent?: AgentId;
+  attachments?: AttachmentRef[];
+  /** User messages: pending -> running -> done | failed. */
+  status?: 'pending' | 'running' | 'done' | 'failed';
+  /** Agent messages: files changed by this turn (committed on the chat branch). */
+  files?: string[];
+};
+
+export type Chat = {
+  id: string;
+  project: string;
+  title: string;
+  branch: string;
+  baseBranch: string;
+  baseSha: string;
+  /** 'auto' lets the router choose and hand over on limits; otherwise a fixed agent. */
+  mode: 'auto' | AgentId;
+  /** Agent-side conversation ids, so each agent continues its own session. */
+  sessions: Partial<Record<AgentId, string>>;
+  lastAgent?: AgentId;
+  messages: ChatMessage[];
+  status: 'idle' | 'running' | 'waiting';
+  /** pid of the `sb chat-turn` process while a turn runs. */
+  pid?: number;
+  waitUntil?: string;
+  turns: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PermissionRules = { allow: string[]; deny: string[] };
 
 export type SwitchboardConfig = {
@@ -129,4 +164,5 @@ export type SwitchboardConfig = {
   limitDetection: { tailLines: number; patterns: string[] };
   handoff: { maxHandoffs: number };
   notifications: { enabled: boolean };
+  chat: { order: AgentId[] };
 };
