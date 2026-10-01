@@ -8,9 +8,14 @@
     "dist"
   ],
   "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
     "paths": {
       "@core/*": [
         "../../packages/core/*"
+      ],
+      "@/*": [
+        "./src/*"
       ]
     }
   }

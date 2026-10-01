@@ -1,25 +1,18 @@
-// POST /api/tasks: starts a task from the dashboard form (spawns a separate `sb run`).
+// POST /api/tasks: starts a task from the dashboard form (multipart: fields + files; spawns a separate `sb run`).
 import type { APIRoute } from 'astro';
 import { loadConfig } from '@core/config';
 import { launchTask } from '@core/launch';
-import { checkRequest, forbidden } from '../../guard';
+import { field, guard, respond, uploadsOf } from '../../api';
 
-export const POST: APIRoute = async ({ request, redirect }) => {
-  const denied = checkRequest(request);
-  if (denied) return forbidden(denied);
-
+export const POST: APIRoute = async ({ request }) => {
+  const denied = guard(request);
+  if (denied) return denied;
   const form = await request.formData();
-  const field = (name: string) => String(form.get(name) ?? '');
-  const result = await launchTask(loadConfig(), {
-    text: field('text'),
-    type: field('type'),
-    project: field('project'),
-    priority: field('priority'),
-    figma: field('figma'),
-  });
-
-  if (request.headers.get('accept')?.includes('application/json')) {
-    return Response.json(result, { status: result.ok ? 200 : result.status, headers: { 'cache-control': 'no-store' } });
-  }
-  return redirect('/', 303);
+  return respond(
+    await launchTask(
+      loadConfig(),
+      { text: field(form, 'text'), type: field(form, 'type'), project: field(form, 'project'), priority: field(form, 'priority'), figma: field(form, 'figma') },
+      await uploadsOf(form),
+    ),
+  );
 };

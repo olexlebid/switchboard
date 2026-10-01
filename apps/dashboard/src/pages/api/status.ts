@@ -1,10 +1,10 @@
-// GET /api/status: JSON overview (re-reads limits when older than dashboard.refreshTtlSec).
+// GET /api/status: JSON limits overview (re-reads limits when older than dashboard.refreshTtlSec).
 import type { APIRoute } from 'astro';
 import { getOverview } from '@core/overview';
-import { checkRequest, forbidden } from '../../guard';
+import { guard, json } from '../../api';
 
 export const GET: APIRoute = async ({ request }) => {
-  const denied = checkRequest(request);
-  if (denied) return forbidden(denied);
-  return Response.json(await getOverview('if-stale'), { headers: { 'cache-control': 'no-store' } });
+  const denied = guard(request);
+  if (denied) return denied;
+  return json(await getOverview('if-stale'));
 };

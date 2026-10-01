@@ -12,13 +12,22 @@ const { title } = Astro.props;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
     <meta name="robots" content="noindex, nofollow" />
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237aa2ff' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M12 2v20M2 12h20M5 5l14 14M19 5L5 19'/%3E%3C/svg%3E"
     />
     <title>{title}</title>
+    <script is:inline>
+      // Applies the saved theme (light / dark / system) before first paint to avoid a flash.
+      (function () {
+        try {
+          var t = localStorage.getItem('sb-theme') || 'system';
+          var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <slot />

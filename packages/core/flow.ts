@@ -349,6 +349,7 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
 
       task.status = touchedProtected.length > 0 ? 'blocked' : agentUnfinished ? 'waiting' : status === 'done' ? 'done' : status === 'blocked' ? 'blocked' : 'failed';
       task.note = oneLine(run.reason ?? run.summary ?? '', 200) || undefined;
+      task.openQuestions = lastProgress.openQuestions.length ? lastProgress.openQuestions.slice(0, 10) : undefined;
       saveRun(run);
       saveTask(task);
       break;

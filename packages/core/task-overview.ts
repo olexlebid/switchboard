@@ -32,6 +32,8 @@ export type TaskView = {
   startedAt?: string;
   logTail: string[];
   note?: string;
+  /** The agent's open questions (PROGRESS.md) that the user can answer when continuing. */
+  openQuestions: string[];
   waitUntil?: string;
   canResume: boolean;
   canStop: boolean;
@@ -149,6 +151,7 @@ function view(t: Task): TaskView {
     // The log of a finished task is useful too (the last lines explain how it ended).
     logTail: last && last.logPath.startsWith(runsDir()) && existsSync(last.logPath) ? tailFile(last.logPath, 20) : [],
     note: t.note?.replace(/\s+/g, ' ').slice(0, 220),
+    openQuestions: t.openQuestions ?? [],
     waitUntil: t.waitUntil,
     canResume: t.status === 'waiting' || t.status === 'blocked' || t.status === 'failed',
     canStop: live && !!t.pid,

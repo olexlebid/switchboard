@@ -92,6 +92,8 @@ export type Task = {
   pid?: number;
   /** Files the user attached (already stored inside the project). */
   attachments?: AttachmentRef[];
+  /** What the agent listed under "Open questions" in PROGRESS.md at the end of its last run. */
+  openQuestions?: string[];
   /** The user's answers to the agent's open questions, oldest first. */
   clarifications?: { at: string; text: string }[];
 };
