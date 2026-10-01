@@ -54,7 +54,7 @@ export function TaskPanel({ tasks, rules, now, onResult, reload }: Props) {
           </TabsList>
 
           <TabsContent value="running" className="flex flex-col gap-3">
-            {tasks.running.length === 0 && <EmptyNote title="Нічого не виконується" text="Запусти задачу у формі «Нова задача»." />}
+            {tasks.running.length === 0 && <EmptyNote title="Нічого не виконується" text="Запускай задачі через Claude Code (sb run)." />}
             {tasks.running.map((t) => (
               <article key={t.id} className="flex flex-col gap-2 rounded-lg border p-3" aria-labelledby={`task-${t.id}`}>
                 <header className="flex items-center gap-2">

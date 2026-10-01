@@ -1,4 +1,5 @@
-// The dashboard: limits of both agents (left), chat (right), manual marks, new task + task panel.
+// The dashboard is a status board: limits of both agents (left), tasks (right), manual marks.
+// Work is started from the CLI (`sb run` / `sb chat`), not from the page.
 // Everything is built from shadcn/ui components; data comes from GET /api/state.
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -13,10 +14,8 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { useDashboard, useNow, useStoredString } from '@/hooks/use-dashboard';
 import { post, type ActionResult } from '@/lib/api';
 import { AgentCard } from './AgentCard';
-import { ChatPanel } from './ChatPanel';
 import { ManualMarks } from './ManualMarks';
 import { StatusBadge } from './StatusBadge';
-import { TaskForm } from './TaskForm';
 import { TaskPanel } from './TaskPanel';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -107,32 +106,16 @@ export default function App() {
           </Alert>
         )}
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+        {!project && <NoProjects />}
+
+        <section aria-label="Статус і задачі" className="grid items-start gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
           <div className="flex flex-col gap-4">
             {state.overview.agents.map((a) => <AgentCard key={a.agent} agent={a} thresholds={state.overview.thresholds} now={now} />)}
           </div>
-          {/* The chat follows the height of the two cards on the left (absolute fill), with a sensible minimum. */}
-          <div className="relative min-h-[32rem]">
-            <div className="absolute inset-0">
-              {project ? (
-                <ChatPanel project={project.path} projectName={project.name} chat={state.chat} rules={state.uploads} now={now} onResult={show} reload={reloadAsync} />
-              ) : (
-                <NoProjects />
-              )}
-            </div>
-          </div>
-        </div>
-
-        <ManualMarks cards={state.overview.manual} onChange={(id, v) => void mark(id, v)} />
-
-        <section aria-label="Задачі" className="grid items-start gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
-          {project ? (
-            <TaskForm project={project.path} projectName={project.name} types={state.tasks.types} rules={state.uploads} onResult={show} reload={reloadAsync} />
-          ) : (
-            <NoProjects />
-          )}
           <TaskPanel tasks={state.tasks} rules={state.uploads} now={now} onResult={show} reload={reloadAsync} />
         </section>
+
+        <ManualMarks cards={state.overview.manual} onChange={(id, v) => void mark(id, v)} />
       </main>
     </TooltipProvider>
   );
