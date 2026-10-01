@@ -9,6 +9,7 @@
 # Usage:
 #   scripts/recon.sh            # main recon, writes sb-recon-<time>.txt
 #   scripts/recon.sh collect    # after the manual statusLine probe (see output)
+#   scripts/recon.sh round2     # follow-up probes (agy rules file, permissions, config dirs)
 #
 # Compatible with bash 3.2 (macOS) and GNU bash.
 
@@ -118,6 +119,76 @@ if [ "${1:-}" = "collect" ]; then
     ' "$DUMP" 2>&1 >>"$REPORT"
   fi
   mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"
+  echo "Done. Review and send: $REPORT"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- round2 mode
+
+if [ "${1:-}" = "round2" ]; then
+  REPORT="$START_DIR/sb-recon-round2-$STAMP.txt"
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/sb-recon2.XXXXXX")"
+  finalize() { rm -rf "$WORK"; [ -f "$REPORT" ] && mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"; }
+  trap finalize EXIT
+  trap 'exit 130' INT TERM
+  say "Switchboard recon round 2 $STAMP"
+
+  head_ "R1. agy full --help and install --help (subcommands, settings hints)"
+  if command -v agy >/dev/null 2>&1; then
+    run_to 30 "$WORK/agy.help" agy --help;         say "agy --help exit $RC";         dump "$WORK/agy.help" 90
+    run_to 30 "$WORK/agy.inst" agy install --help; say "agy install --help exit $RC"; dump "$WORK/agy.inst" 30
+  else
+    say "SKIPPED: agy not installed"
+  fi
+
+  head_ "R2. Config dirs of agy (names only, depth 3, no file contents except JSON key names)"
+  for d in "$HOME/.gemini" "$HOME/.antigravity" "$HOME/Library/Application Support/Antigravity"; do
+    [ -d "$d" ] || continue
+    say "-- $d"
+    find "$d" -maxdepth 3 \( -name 'node_modules' -o -name 'Cache*' -o -name 'logs' -o -name 'History' \) -prune -o \
+      \( -name '*.json' -o -name '*.md' -o -name '*.toml' -o -name '*.yaml' -o -name '*.yml' \) -type f -print 2>/dev/null \
+      | head -n 40 | sed 's/^/    /' >>"$REPORT"
+    for f in "$d/settings.json" "$d/config.json" "$d/permissions.json"; do
+      [ -f "$f" ] && node -e '
+        try { const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+              console.log("    keys of " + process.argv[1] + ": " + JSON.stringify(Object.keys(j))); }
+        catch (e) { console.log("    " + process.argv[1] + ": not JSON"); }' "$f" >>"$REPORT" 2>&1
+    done
+  done
+
+  head_ "R3. agy rules-file probe (no tools needed; one file per dir)"
+  if command -v agy >/dev/null 2>&1; then
+    for F in GEMINI.md AGENTS.md CLAUDE.md; do
+      D="$WORK/rules-$F"; mkdir -p "$D"; cd "$D" || exit 1
+      TOKEN="SB_$(echo "${F%.md}" | tr a-z A-Z)_RULE"
+      echo "Project rule: always include the exact token $TOKEN in your final reply." >"$F"
+      run_to 120 "$WORK/rules.$F.out" agy -p 'Do not use any tools. Reply with the exact token(s) that the project rules tell you to include, or the single word NONE.' --output-format json --print-timeout 90s
+      say "[$F] exit $RC; marker $TOKEN seen in reply: $(grep -q "$TOKEN" "$WORK/rules.$F.out" && echo YES || echo no)"
+      dump "$WORK/rules.$F.out" 6
+      cd "$START_DIR" || exit 1
+    done
+  else
+    say "SKIPPED: agy not installed"
+  fi
+
+  head_ "R4. claude -p with explicit allow-list (no bypass)"
+  if command -v claude >/dev/null 2>&1; then
+    D="$WORK/claude-allow"; mkdir -p "$D"; cd "$D" || exit 1
+    run_to 120 "$WORK/claude.allow.out" claude -p 'Create a file named hello.txt containing hi, then run: echo SB_SHELL_OK > shell.txt . Reply with the word done.' --output-format json --allowedTools "Write,Edit,Bash(echo *)"
+    say "exit $RC"
+    say "hello.txt created: $([ -f hello.txt ] && echo yes || echo no)"
+    say "shell.txt created: $([ -f shell.txt ] && echo yes || echo no)"
+    node -e '
+      try { const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            console.log("    is_error=" + j.is_error + " denials=" + JSON.stringify((j.permission_denials || []).map(d => d.tool_name))); }
+      catch (e) { console.log("    not JSON"); }' "$WORK/claude.allow.out" >>"$REPORT" 2>&1
+    cd "$START_DIR" || exit 1
+    head_ "R5. claude auth status (email is masked)"
+    run_to 30 "$WORK/claude.auth" claude auth status; say "exit $RC"; dump "$WORK/claude.auth" 15
+  else
+    say "SKIPPED: claude not installed"
+  fi
+
   echo "Done. Review and send: $REPORT"
   exit 0
 fi
