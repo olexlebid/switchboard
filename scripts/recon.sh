@@ -12,6 +12,7 @@
 #   scripts/recon.sh round2     # follow-up probes (agy rules file, permissions, config dirs)
 #   scripts/recon.sh round3     # agy headless permission mechanisms (10 small requests)
 #   scripts/recon.sh round4     # agy user-level permissions.allow + workspace trust (temporarily edits, then restores, agy settings)
+#   scripts/recon.sh round6     # agy path-scoped write rules in a symlink-free dir (same temporary edit + restore)
 #   scripts/recon.sh round5     # agy rule scoping (path patterns, command patterns, deny precedence); same temporary edit + restore
 #
 # Compatible with bash 3.2 (macOS) and GNU bash.
@@ -261,7 +262,7 @@ fi
 # Tests whether a user-level permissions.allow rule and/or a trusted workspace lets `agy -p`
 # write files. It TEMPORARILY edits ~/.gemini/antigravity-cli/settings.json: the original is
 # backed up first and restored (and verified byte-for-byte) when the script ends, even on Ctrl+C.
-if [ "${1:-}" = "round4" ] || [ "${1:-}" = "round5" ]; then
+if [ "${1:-}" = "round4" ] || [ "${1:-}" = "round5" ] || [ "${1:-}" = "round6" ]; then
   ROUND="$1"
   REPORT="$START_DIR/sb-recon-$ROUND-$STAMP.txt"
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/sb-recon4.XXXXXX")"
@@ -282,7 +283,8 @@ if [ "${1:-}" = "round4" ] || [ "${1:-}" = "round5" ]; then
       fi
     fi
   }
-  finalize() { restore_settings; rm -rf "$WORK"; [ -f "$REPORT" ] && mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"; }
+  PROBEBASE=""
+  finalize() { restore_settings; rm -rf "$WORK"; [ -n "$PROBEBASE" ] && rm -rf "$PROBEBASE"; [ -f "$REPORT" ] && mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"; }
   trap finalize EXIT
   trap 'exit 130' INT TERM
 
@@ -337,7 +339,33 @@ if [ "${1:-}" = "round4" ] || [ "${1:-}" = "round5" ]; then
     cd "$START_DIR" || return
   }
 
-  if [ "$ROUND" = "round4" ]; then
+  if [ "$ROUND" = "round6" ]; then
+    # ---- round 6: path-scoped write rules in a plain directory under $HOME (no /var -> /private/var symlink)
+    PROBEBASE="$HOME/.sb-recon-probe-$STAMP"
+    PROJ="$PROBEBASE/proj"; OTHER="$PROBEBASE/other"; mkdir -p "$PROJ/sub" "$OTHER"
+    PROJ="$(cd "$PROJ" && pwd -P)"; OTHER="$(cd "$OTHER" && pwd -P)"
+    say "project dir for the probes: $PROJ (real path, no symlinks)"
+    probe6() { # probe6 <label> <perms-json> <prompt> <file-to-check>
+      local label=$1 perms=$2 prompt=$3 file=$4
+      cd "$PROJ" || return
+      rm -f "$PROJ"/hello.txt "$PROJ"/sub/nested.txt "$OTHER"/outside.txt
+      PERMS="$perms" apply_settings "" ""
+      run_to 150 "$WORK/$label.out" agy -p "$prompt" --output-format json --print-timeout 120s
+      local denied
+      denied="$(grep -o '"denied_actions":\[[^]]*\]' "$WORK/$label.out" | head -1 | cut -c1-200)"
+      say "[$label] rule=$perms -> $(basename "$file"): $([ -f "$file" ] && echo present || echo ABSENT) | ${denied:-no denied_actions}"
+      cd "$START_DIR" || return
+    }
+    head_ "T1. Path-scoped write rules"
+    probe6 star_inside "{\"allow\":[\"write_file($PROJ/*)\"]}" "Create the file $PROJ/hello.txt containing hi. Reply briefly." "$PROJ/hello.txt"
+    probe6 dstar_inside "{\"allow\":[\"write_file($PROJ/**)\"]}" "Create the file $PROJ/hello.txt containing hi. Reply briefly." "$PROJ/hello.txt"
+    probe6 dstar_nested "{\"allow\":[\"write_file($PROJ/**)\"]}" "Create the file $PROJ/sub/nested.txt containing hi. Reply briefly." "$PROJ/sub/nested.txt"
+    probe6 dstar_outside "{\"allow\":[\"write_file($PROJ/**)\"]}" "Create the file $OTHER/outside.txt containing hi. Reply briefly." "$OTHER/outside.txt"
+    probe6 dir_slash "{\"allow\":[\"write_file($PROJ/)\"]}" "Create the file $PROJ/hello.txt containing hi. Reply briefly." "$PROJ/hello.txt"
+    head_ "T2. Does deny work for writes? (allow everything, deny one directory)"
+    mkdir -p "$PROJ/secret"
+    probe6 deny_write "{\"allow\":[\"write_file(*)\"],\"deny\":[\"write_file($PROJ/secret/*)\"]}" "Create the file $PROJ/secret/hello.txt containing hi. Reply briefly." "$PROJ/secret/hello.txt"
+  elif [ "$ROUND" = "round4" ]; then
     head_ "Q1. Which action name does a shell command use? (untrusted, no rules)"
     probe shell_baseline "$SHELL_PROMPT" "" no
 
