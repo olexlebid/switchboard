@@ -42,6 +42,12 @@ export function taskFileContent(task: Task): string {
     '',
     task.text.trim(),
     '',
+    ...(task.attachments?.length
+      ? ['## Attachments', '', ...task.attachments.map((a) => `- ${a.name} (${a.kind}): ${a.readPaths.length ? a.readPaths.join(', ') : 'cannot be read'}${a.note ? ` [${a.note}]` : ''}`), '']
+      : []),
+    ...(task.clarifications?.length
+      ? ['## Clarifications from the user', '', ...task.clarifications.map((c) => `- (${c.at}) ${c.text}`), '']
+      : []),
     '## Definition of done',
     '',
     ...criteria.map((c) => `- ${c}`),

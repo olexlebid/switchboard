@@ -1,5 +1,6 @@
 // Prompts sent to agents. Written in English (more stable for the models); the language of the
 // site texts is whatever the task says.
+import { attachmentsPrompt } from './attachments';
 import type { AgentId, Task } from './types';
 
 export type PromptContext = {
@@ -51,9 +52,15 @@ function missingNote(task: Task, ctx: PromptContext): string {
   return missing.length ? `Not present in this project: ${missing.join(', ')}. Do not look for them${missing.includes('PROGRESS.md') ? '; create PROGRESS.md when you finish' : ''}.\n` : '';
 }
 
+/** Attachments and the user's answers to earlier open questions, as prompt text. */
+export function extrasPrompt(task: Task, agent: AgentId): string {
+  const answers = (task.clarifications ?? []).map((c) => `- (${c.at}) ${c.text}`).join('\n');
+  return `${attachmentsPrompt(task.attachments ?? [], agent)}${answers ? `\nThe user answered your open questions / added clarifications (they override earlier assumptions):\n${answers}\n` : ''}`;
+}
+
 /** First-run prompt: preamble plus the task text. */
 export function buildStartPrompt(task: Task, ctx: PromptContext): string {
-  return `${PREAMBLE(task, ctx)}\n\n---\nTASK (${task.type}${task.priority === 'high' ? ', high priority' : ''}):\n\n${task.text.trim()}\n${task.figma ? `\nFigma frame: ${task.figma}\n` : ''}`;
+  return `${PREAMBLE(task, ctx)}\n\n---\nTASK (${task.type}${task.priority === 'high' ? ', high priority' : ''}):\n\n${task.text.trim()}\n${task.figma ? `\nFigma frame: ${task.figma}\n` : ''}${extrasPrompt(task, ctx.agent)}`;
 }
 
 /**
@@ -78,5 +85,5 @@ ${inspect}
 ORIGINAL TASK (${task.type}${task.priority === 'high' ? ', high priority' : ''}):
 
 ${task.text.trim()}
-${task.figma ? `\nFigma frame: ${task.figma}\n` : ''}`;
+${task.figma ? `\nFigma frame: ${task.figma}\n` : ''}${extrasPrompt(task, ctx.agent)}`;
 }

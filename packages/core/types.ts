@@ -1,5 +1,7 @@
 // Shared types for limits, statuses and config.
 
+import type { AttachmentRef } from './attachments';
+
 export type AgentId = 'claude' | 'agy';
 
 export type UsageWindow = {
@@ -88,6 +90,10 @@ export type Task = {
   reviews?: string;
   /** pid of the `sb` process that is working on the task (set while it runs). */
   pid?: number;
+  /** Files the user attached (already stored inside the project). */
+  attachments?: AttachmentRef[];
+  /** The user's answers to the agent's open questions, oldest first. */
+  clarifications?: { at: string; text: string }[];
 };
 
 export type Handoff = { from: AgentId; to?: AgentId; at: string; reason: string };

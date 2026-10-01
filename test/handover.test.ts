@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig } from '../packages/core/config';
 import { resumeTask, startTask, type FlowDeps, type StartInput } from '../packages/core/flow';
+import { saveAttachments } from '../packages/core/attachments';
 import { outputTail, writeCheckpoint } from '../packages/core/handoff';
 import { buildOverview } from '../packages/core/overview';
 import { clearExhausted, readState, setExhausted } from '../packages/core/store';
@@ -291,5 +292,43 @@ describe('writeCheckpoint', () => {
     const r = await writeCheckpoint({ project, task: makeTask(), from: 'agy', reason: 'ліміт', tail: '' });
     expect(r.sha).toBeDefined();
     expect(readFileSync(join(project, 'PROGRESS.md'), 'utf8')).toContain('(no file changes yet)');
+  });
+});
+
+describe('attachments and clarifications travel with the task', () => {
+  it('attachments are listed in the prompt and in the task file; the working tree stays clean', async () => {
+    const cfg = cfgFor({ claude: 'success', agy: 'success' });
+    const batch = await saveAttachments(project, [{ name: 'layout.png', data: await (await import('sharp')).default({ create: { width: 20, height: 20, channels: 3, background: '#fff' } }).png().toBuffer() }, { name: 'brief.txt', data: Buffer.from('Kindertanz page') }]);
+    const r = await startTask(input({ attachmentsDir: batch.dir }), cfg, () => {}, deps(cfg));
+    expect(r.task.status).toBe('done');
+    expect(r.task.attachments?.map((a) => a.name)).toEqual(['layout.png', 'brief.txt']);
+    const [first] = prompts();
+    expect(first).toContain('ATTACHMENTS from the user');
+    expect(first).toContain(batch.items[0]!.path);
+    expect(git('show', `${r.task.branch}:.sb/tasks/${r.task.id}.md`)).toContain('## Attachments');
+    expect(git('status', '--porcelain')).toBe('');
+    // the uploaded files themselves are never committed
+    expect(git('ls-tree', '-r', '--name-only', r.task.branch)).not.toContain('.sb/attachments');
+  });
+
+  it('rejects an attachment folder outside .sb/attachments', async () => {
+    const cfg = cfgFor({});
+    await expect(startTask(input({ attachmentsDir: '../..' }), cfg, () => {}, deps(cfg))).rejects.toThrow(/Вкладення/);
+  });
+
+  it("resume with a clarification puts the user's answer into the continuation prompt and the task file", async () => {
+    const cfg = cfgFor({ claude: 'limit', agy: 'success', reset: in2h(), extra: 'handoff: { maxHandoffs: 0 }' });
+    const waiting = await startTask(input(), cfg, () => {}, deps(cfg));
+    expect(waiting.task.status).toBe('waiting');
+    clearExhausted('claude');
+    const okCfg = cfgFor({ claude: 'success', agy: 'success' });
+    const done = await resumeTask(waiting.task.id, okCfg, () => {}, deps(okCfg), { clarification: 'Use three columns and the accent color from DESIGN.md' });
+    expect(done.task.status).toBe('done');
+    const last = prompts().at(-1)!;
+    expect(last).toContain('You are continuing a task started by another AI agent');
+    expect(last).toContain('The user answered your open questions');
+    expect(last).toContain('Use three columns');
+    expect(git('show', `${done.task.branch}:.sb/tasks/${done.task.id}.md`)).toContain('## Clarifications from the user');
+    expect(readState().tasks[done.task.id]?.clarifications).toHaveLength(1);
   });
 });

@@ -27,7 +27,7 @@ const HELP = `Switchboard
                                запустити задачу в гілці sb/<id>. Без --agent агента обирає роутер за
                                лімітами; при ліміті задача передається іншому агентові. main і деплой за тобою.
   queue [--run-due]            список задач; --run-due продовжує ті, що чекали скидання ліміту й уже можуть іти
-  resume <id> [--agent ...]    продовжити задачу, що чекає, заблокована або впала
+  resume <id> [--agent ...] [--note "відповідь агенту"]   продовжити задачу, що чекає, заблокована або впала
   unblock claude|agy           зняти позначку «ліміт вичерпано» (якщо вона хибна)
   project add|remove|list      проєкти, у яких дешборд може запускати задачі (проєкти з sb run додаються самі)
   notify-test                  перевірити системне сповіщення (macOS)
@@ -83,7 +83,7 @@ async function run(argv: string[]): Promise<number> {
     options: {
       project: { type: 'string' }, type: { type: 'string' }, agent: { type: 'string' },
       priority: { type: 'string' }, figma: { type: 'string' }, timeout: { type: 'string' },
-      reviews: { type: 'string' }, 'no-handoff': { type: 'boolean' },
+      reviews: { type: 'string' }, 'no-handoff': { type: 'boolean' }, attachments: { type: 'string' },
     },
   });
   const text = positionals.join(' ').trim();
@@ -105,6 +105,7 @@ async function run(argv: string[]): Promise<number> {
       timeoutMin: values.timeout ? Number(values.timeout) : undefined,
       reviews: values.reviews,
       noHandoff: values['no-handoff'],
+      attachmentsDir: values.attachments,
     },
     loadConfig(),
     (line) => console.log(line),
@@ -116,7 +117,7 @@ async function resume(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { agent: { type: 'string' }, timeout: { type: 'string' }, 'no-handoff': { type: 'boolean' } },
+    options: { agent: { type: 'string' }, timeout: { type: 'string' }, 'no-handoff': { type: 'boolean' }, note: { type: 'string' }, attachments: { type: 'string' } },
   });
   const id = positionals[0];
   if (!id) {
@@ -128,6 +129,8 @@ async function resume(argv: string[]): Promise<number> {
     agent: values.agent as AgentId | undefined,
     timeoutMin: values.timeout ? Number(values.timeout) : undefined,
     noHandoff: values['no-handoff'],
+    clarification: values.note,
+    attachmentsDir: values.attachments,
   });
   return printResult(r);
 }

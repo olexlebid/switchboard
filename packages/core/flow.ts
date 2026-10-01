@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { loadBatch } from './attachments';
 import { AgyPermissionError, applyAgyRules, DEFAULT_AGY_SETTINGS, recoverAgyRules, type AgyRuleHandle } from './agy-permissions';
 import { onExit } from './cleanup';
 import { changedFiles, checkoutBranch, commitAll, currentBranch, dirtyFiles, headSha, isGitRepo, pushBranch, switchBack } from './git';
@@ -41,6 +42,8 @@ export type StartInput = {
   reviews?: string;
   /** Stop at the first usage limit instead of handing over to the other agent. */
   noHandoff?: boolean;
+  /** Batch folder (relative to the project) saved by saveAttachments. */
+  attachmentsDir?: string;
 };
 
 /** Everything that talks to the outside world, replaceable in tests. */
@@ -90,6 +93,14 @@ function makeCtx(cfg: SwitchboardConfig, say: (s: string) => void, deps: FlowDep
   };
 }
 
+function loadBatchOrFail(project: string, dir: string) {
+  try {
+    return loadBatch(project, dir);
+  } catch (e) {
+    throw new SbError(`Вкладення: ${(e as Error).message}`, 2);
+  }
+}
+
 function expandHome(p: string): string {
   return resolve(p.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'));
 }
@@ -131,6 +142,7 @@ export async function startTask(
     runs: [],
     handoffs: [],
     reviews: input.reviews,
+    attachments: input.attachmentsDir ? loadBatchOrFail(project, input.attachmentsDir).items : undefined,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -145,7 +157,7 @@ export async function resumeTask(
   cfg: SwitchboardConfig,
   say: (s: string) => void = () => {},
   deps: FlowDeps = {},
-  opts: { agent?: AgentId; timeoutMin?: number; noHandoff?: boolean } = {},
+  opts: { agent?: AgentId; timeoutMin?: number; noHandoff?: boolean; clarification?: string; attachmentsDir?: string } = {},
 ): Promise<StartResult> {
   const task = readState().tasks[id];
   if (!task) throw new SbError(`Задачі ${id} не існує. Подивись \`sb queue\`.`, 2);
@@ -158,6 +170,10 @@ export async function resumeTask(
     throw new SbError(`Робоче дерево в ${task.project} не чисте (${dirty.length} змін). Закоміть або відклади зміни й повтори.\n  ${dirty.slice(0, 8).join('\n  ')}`, 3);
   }
   task.waitUntil = undefined;
+  // The user's answer to the agent's open questions (and any new files) travel with the task.
+  if (opts.clarification?.trim()) task.clarifications = [...(task.clarifications ?? []), { at: new Date().toISOString(), text: opts.clarification.trim().slice(0, 4000) }];
+  if (opts.attachmentsDir) task.attachments = [...(task.attachments ?? []), ...loadBatchOrFail(task.project, opts.attachmentsDir).items];
+  saveTask(task);
   // A branch with earlier runs means there is work to continue; a never-started task begins normally.
   return drive(task, makeCtx(cfg, say, deps), { pinned: opts.agent, timeoutMin: opts.timeoutMin, noHandoff: opts.noHandoff, resuming: task.runs.length > 0 });
 }
