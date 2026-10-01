@@ -2,16 +2,15 @@
 // Work is started from the CLI (`sb run` / `sb chat`), not from the page.
 // Everything is built from shadcn/ui components; data comes from GET /api/state.
 import { RefreshCw } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { STATUS_LABEL } from '@core/status';
 import type { AgentStatus } from '@core/types';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { useDashboard, useNow, useStoredString } from '@/hooks/use-dashboard';
+import { useDashboard, useNow } from '@/hooks/use-dashboard';
 import { post, type ActionResult } from '@/lib/api';
 import { AgentCard } from './AgentCard';
 import { ManualMarks } from './ManualMarks';
@@ -22,15 +21,11 @@ import { ThemeToggle } from './ThemeToggle';
 const ORDER: AgentStatus[] = ['available', 'low', 'reserve', 'exhausted', 'unknown'];
 
 export default function App() {
-  const [stored, setStored] = useStoredString('sb-project');
-  const { state, offline, reload } = useDashboard(stored);
+  const { state, offline, reload } = useDashboard();
   const now = useNow(15_000);
   const [notice, setNotice] = useState<ActionResult>();
   const [refreshing, setRefreshing] = useState(false);
   const noticeTimer = useRef<number>(undefined);
-
-  const projects = state?.tasks.projects ?? [];
-  const project = useMemo(() => projects.find((p) => p.path === stored) ?? projects[0], [projects, stored]);
 
   const show = (r: ActionResult) => {
     const text = r.ok ? r.message : r.error;
@@ -81,14 +76,6 @@ export default function App() {
             ))}
           </ul>
           <div className="ml-auto flex items-center gap-2">
-            {projects.length > 0 && (
-              <Select value={project?.path} onValueChange={setStored}>
-                <SelectTrigger size="sm" className="w-44" aria-label="Проєкт"><SelectValue /></SelectTrigger>
-                <SelectContent align="end">
-                  {projects.map((p) => <SelectItem key={p.path} value={p.path}>{p.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            )}
             <p className="text-xs text-muted-foreground" aria-live="polite">
               Оновлено <time dateTime={updated.toISOString()}>{updated.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
             </p>
@@ -106,8 +93,6 @@ export default function App() {
           </Alert>
         )}
 
-        {!project && <NoProjects />}
-
         <section aria-label="Статус і задачі" className="grid items-start gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
           <div className="flex flex-col gap-4">
             {state.overview.agents.map((a) => <AgentCard key={a.agent} agent={a} thresholds={state.overview.thresholds} now={now} />)}
@@ -118,15 +103,5 @@ export default function App() {
         <ManualMarks cards={state.overview.manual} onChange={(id, v) => void mark(id, v)} />
       </main>
     </TooltipProvider>
-  );
-}
-
-function NoProjects() {
-  return (
-    <Alert>
-      <AlertDescription>
-        Немає дозволених проєктів. Додай один командою <code className="rounded bg-muted px-1">pnpm sb project add ~/шлях/до/проєкту</code>.
-      </AlertDescription>
-    </Alert>
   );
 }

@@ -52,7 +52,7 @@ pnpm sb status          # перевірка: має показати ліміт
 
 ```bash
 pnpm sb dashboard                       # дашборд на http://127.0.0.1:4321
-pnpm sb project add ~/projects/amaro    # дозволити проєкт для запуску з дашборду
+pnpm sb project add ~/projects/amaro    # дозволити проєкт для запуску через sb
 pnpm sb init ~/projects/amaro           # одноразово: файли правил для агентів
 git -C ~/projects/amaro add -A && git -C ~/projects/amaro commit -m "chore: add Switchboard files"
 ```
@@ -65,7 +65,7 @@ git -C ~/projects/amaro add -A && git -C ~/projects/amaro commit -m "chore: add 
 
 | Зона | Що там |
 |---|---|
-| Шапка | зведення статусів, вибір **проєкту**, час оновлення, «Оновити», тема |
+| Шапка | зведення статусів, час оновлення, «Оновити», тема |
 | Ліворуч | картки **Claude Code** і **Antigravity** (одна під одною): статус текстом, смуги «5 год» і «Тиждень», відлік до скидання, групи моделей |
 | Праворуч | панель **задач** (вкладки: Виконується, Черга, Останні, Передачі) |
 | Під ними | «Ручні позначки» (Gemini-чат, Stitch: для сервісів без API, у роутингу не беруть участі) |
