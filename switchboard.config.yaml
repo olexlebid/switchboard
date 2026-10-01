@@ -2,7 +2,7 @@
 agents:
   claude:
     cmd: claude
-    headlessArgs: ["-p"]
+    headlessArgs: ["-p", "--output-format", "json"]   # the prompt is inserted right after -p
     usageArgs: ["-p", "/usage"]      # prints "Current session: N% used ..." (recon rows 15)
     models: []
   agy:
@@ -33,3 +33,52 @@ dashboard:
   manualCards:            # optional hand-set cards (no API); not used by the router. Use [] to hide.
     - { id: gemini-chat, title: "Gemini (чат)" }
     - { id: stitch, title: "Stitch" }
+
+run:
+  timeoutMin: 20          # one agent run is killed after this long
+
+git:
+  pushBranches: false     # true: push sb/<id> to origin after a run (Netlify deploy preview). Never pushes main.
+
+# Headless runs cannot ask for confirmation, so everything an agent may do is listed here.
+# Anything not allowed is denied and reported as "blocked". No full permission bypass is used.
+permissions:
+  claude:
+    allow:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - "Bash(git status*)"
+      - "Bash(git diff*)"
+      - "Bash(git log*)"
+      - "Bash(pnpm run *)"
+      - "Bash(pnpm build*)"
+      - "Bash(pnpm test*)"
+      - "Bash(npm run *)"
+      - "Bash(npx astro *)"
+      - "Bash(ls*)"
+    deny:
+      - "Bash(git push*)"
+      - "Bash(git commit*)"
+      - "Bash(git reset*)"
+      - "Bash(git checkout*)"
+      - "Bash(git switch*)"
+      - "Bash(git merge*)"
+      - "Bash(git rebase*)"
+      - "Bash(git clean*)"
+      - "Bash(rm -rf*)"
+      - "Bash(sudo*)"
+      - "Bash(curl*)"
+      - "Bash(pnpm add*)"
+      - "Bash(pnpm install*)"
+      - "Bash(npm install*)"
+      - "Read(./.env*)"
+      - "Edit(./netlify.toml)"
+      - "Write(./netlify.toml)"
+  agy:
+    # Filled after the agy permission probe (`scripts/recon.sh round3`), see docs/recon.md.
+    allow: []
+    deny: []
+    args: []

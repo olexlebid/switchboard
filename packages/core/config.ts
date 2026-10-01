@@ -69,6 +69,18 @@ export function parseConfig(text: string): SwitchboardConfig {
     routing[type] = list as AgentId[];
   }
 
+  const permissions = {} as SwitchboardConfig['permissions'];
+  for (const id of AGENT_IDS) {
+    const p = raw.permissions?.[id] ?? {};
+    permissions[id] = {
+      allow: strArray(p.allow, `permissions.${id}.allow`, []),
+      deny: strArray(p.deny, `permissions.${id}.deny`, []),
+      args: strArray(p.args, `permissions.${id}.args`, []),
+    };
+  }
+  for (const id of AGENT_IDS) {
+    if (agents[id].headlessArgs[0] !== '-p') fail(`agents.${id}.headlessArgs must start with "-p"`);
+  }
   const l = raw.limits ?? {};
   const d = raw.dashboard ?? {};
   const manualCards = Array.isArray(d.manualCards)
@@ -86,6 +98,9 @@ export function parseConfig(text: string): SwitchboardConfig {
     dashboard: { refreshTtlSec: num(d.refreshTtlSec, 'dashboard.refreshTtlSec', 60), manualCards },
     thresholds,
     routing,
+    run: { timeoutMin: num(raw.run?.timeoutMin, 'run.timeoutMin', 20) },
+    git: { pushBranches: raw.git?.pushBranches === true },
+    permissions,
   };
 }
 

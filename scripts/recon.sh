@@ -10,6 +10,7 @@
 #   scripts/recon.sh            # main recon, writes sb-recon-<time>.txt
 #   scripts/recon.sh collect    # after the manual statusLine probe (see output)
 #   scripts/recon.sh round2     # follow-up probes (agy rules file, permissions, config dirs)
+#   scripts/recon.sh round3     # agy headless permission mechanisms (10 small requests)
 #
 # Compatible with bash 3.2 (macOS) and GNU bash.
 
@@ -189,6 +190,66 @@ if [ "${1:-}" = "round2" ]; then
     say "SKIPPED: claude not installed"
   fi
 
+  echo "Done. Review and send: $REPORT"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- round3 mode
+
+if [ "${1:-}" = "round3" ]; then
+  REPORT="$START_DIR/sb-recon-round3-$STAMP.txt"
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/sb-recon3.XXXXXX")"
+  finalize() { rm -rf "$WORK"; [ -f "$REPORT" ] && mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"; }
+  trap finalize EXIT
+  trap 'exit 130' INT TERM
+  say "Switchboard recon round 3 (agy headless permissions) $STAMP"
+  command -v agy >/dev/null 2>&1 || { say "agy not installed"; echo "Done. Review and send: $REPORT"; exit 0; }
+
+  head_ "P1. Keys of agy settings files (key names only; values only inside a 'permissions' object)"
+  for f in "$HOME/.gemini/antigravity-cli/settings.json" "$HOME/.gemini/settings.json"; do
+    [ -f "$f" ] || continue
+    say "-- $f"
+    node -e '
+      const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      const walk = (o, d, pre) => Object.entries(o).forEach(([k, v]) => {
+        if (k === "permissions") { console.log("    " + pre + k + " = " + JSON.stringify(v)); return; }
+        if (v && typeof v === "object" && !Array.isArray(v) && d < 2) { console.log("    " + pre + k + ": {...}"); walk(v, d + 1, pre + k + "."); }
+        else console.log("    " + pre + k + ": " + (Array.isArray(v) ? "array(" + v.length + ")" : typeof v));
+      });
+      walk(j, 0, "");' "$f" >>"$REPORT" 2>&1
+  done
+
+  PROMPT='Do exactly two things. 1) Create a file named hello.txt containing the word hi. 2) Run the shell command: echo SB_SHELL_OK > shell.txt . Then reply with one short sentence.'
+  # probe <label> <dir-setup-fn> <extra agy flags...>
+  probe() {
+    local label=$1 setup=$2; shift 2
+    local d="$WORK/$label"; mkdir -p "$d"; cd "$d" || return
+    $setup "$d"
+    run_to 150 "$WORK/$label.out" agy -p "$PROMPT" --output-format json --print-timeout 120s "$@"
+    local denied
+    denied="$(grep -o '"denied_actions":\[[^]]*\]' "$WORK/$label.out" | head -1 | cut -c1-160)"
+    say "[$label] exit $RC | hello.txt: $([ -f hello.txt ] && echo yes || echo no) | shell.txt: $([ -f shell.txt ] && echo yes || echo no) | ${denied:-no denied_actions field}"
+    cd "$START_DIR" || return
+  }
+  nosetup() { :; }
+  project_settings() { # $1 = dir; $JSON_PATH = relative settings file to create
+    mkdir -p "$1/$(dirname "$JSON_PATH")"
+    echo '{"permissions":{"allow":["write_file(*)","run_command(echo *)"]}}' >"$1/$JSON_PATH"
+  }
+
+  head_ "P2. Flags that might allow edits without a full bypass"
+  probe baseline nosetup
+  probe accept_edits nosetup --mode accept-edits
+  probe accept_edits_sandbox nosetup --mode accept-edits --sandbox
+
+  head_ "P3. Project-level settings.json candidates with permissions.allow (write_file, run_command)"
+  for JSON_PATH in ".gemini/settings.json" ".agy/settings.json" ".antigravity/settings.json" ".antigravity-cli/settings.json" ".gemini/antigravity-cli/settings.json"; do
+    export JSON_PATH
+    probe "proj_$(echo "$JSON_PATH" | tr '/.' '__')" project_settings
+  done
+
+  say ""
+  say "Notes: hello.txt = file writes work, shell.txt = shell commands work. Nothing here uses --dangerously-skip-permissions."
   echo "Done. Review and send: $REPORT"
   exit 0
 fi

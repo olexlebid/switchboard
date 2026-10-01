@@ -56,10 +56,55 @@ export type Thresholds = {
 
 export type ManualCardConfig = { id: string; title: string };
 
+export type TaskStatus = 'queued' | 'running' | 'waiting' | 'blocked' | 'failed' | 'done';
+
+export type Task = {
+  id: string;
+  /** Free-text task description (what the agent must do). */
+  text: string;
+  type: string;
+  project: string;
+  priority: 'normal' | 'high';
+  figma?: string;
+  status: TaskStatus;
+  branch: string;
+  /** Branch the project was on when the task started; the runner returns to it. */
+  baseBranch: string;
+  baseSha: string;
+  /** Agent of the latest run. */
+  agent?: AgentId;
+  runs: string[];
+  createdAt: string;
+  updatedAt: string;
+  /** Short human-readable note about the last outcome. */
+  note?: string;
+};
+
+export type Run = {
+  id: string;
+  taskId: string;
+  agent: AgentId;
+  startedAt: string;
+  endedAt?: string;
+  exitCode?: number | null;
+  status: 'running' | 'done' | 'blocked' | 'failed';
+  logPath: string;
+  /** Why it ended the way it did (denied tools, timeout, error text). */
+  reason?: string;
+  /** Agent's own final message (claude `result`, agy `response`), truncated. */
+  summary?: string;
+};
+
+export type PermissionRules = { allow: string[]; deny: string[] };
+
 export type SwitchboardConfig = {
   agents: Record<AgentId, AgentConfig>;
   limits: { staleAfterMin: number; fetchTimeoutSec: number };
   dashboard: { refreshTtlSec: number; manualCards: ManualCardConfig[] };
   thresholds: Thresholds;
   routing: Record<string, AgentId[]>;
+  run: { timeoutMin: number };
+  git: { pushBranches: boolean };
+  /** Per-agent permission rules and extra CLI args used for headless runs. */
+  permissions: Record<AgentId, PermissionRules & { args: string[] }>;
 };

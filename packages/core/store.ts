@@ -3,7 +3,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { AgentId, ExhaustedMark, UsageSnapshot } from './types';
+import type { AgentId, ExhaustedMark, Run, Task, UsageSnapshot } from './types';
 
 export type State = {
   version: 1;
@@ -13,6 +13,8 @@ export type State = {
   exhausted: Partial<Record<AgentId, ExhaustedMark>>;
   /** Hand-set marks for services without an API (dashboard manual cards). */
   manual: Record<string, { state: 'available' | 'exhausted'; at: string }>;
+  tasks: Record<string, Task>;
+  runs: Record<string, Run>;
   /** Slow-changing facts cached between refreshes. */
   meta: { agyModels?: { count: number; at: string } };
 };
@@ -28,7 +30,7 @@ function statePath(): string {
 }
 
 function emptyState(): State {
-  return { version: 1, snapshots: {}, history: [], exhausted: {}, manual: {}, meta: {} };
+  return { version: 1, snapshots: {}, history: [], exhausted: {}, manual: {}, tasks: {}, runs: {}, meta: {} };
 }
 
 export function readState(): State {
@@ -76,4 +78,16 @@ export function clearExhausted(agent: AgentId): void {
 
 export function setManual(id: string, state: 'available' | 'exhausted', now = new Date()): void {
   updateState((s) => { s.manual[id] = { state, at: now.toISOString() }; });
+}
+
+export function runsDir(): string {
+  return join(sbHome(), 'runs');
+}
+
+export function saveTask(task: Task): void {
+  updateState((s) => { s.tasks[task.id] = { ...task, updatedAt: new Date().toISOString() }; });
+}
+
+export function saveRun(run: Run): void {
+  updateState((s) => { s.runs[run.id] = run; });
 }
