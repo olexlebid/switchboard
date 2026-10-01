@@ -119,6 +119,7 @@ Hard rules:
 - Do NOT run git commit, push, merge, rebase, reset, checkout or deploy. The orchestrator commits your edits after each reply.
 - Do NOT install or remove dependencies and do NOT edit netlify.toml.
 - Do not read or print secrets (.env files, tokens).
+- You have NO network access: never open URLs or fetch web pages (no read_url, web fetch, curl). Links in project files, Figma links included, cannot be opened here: work from the attached screenshots and the text you were given, and if a frame is missing, ask the user to attach a screenshot.
 - If something is missing or unclear (a color, a breakpoint, a text), ask the user instead of inventing it.
 - Answer in the language the user writes in. Keep answers short; list the files you changed.`;
 
@@ -306,7 +307,7 @@ export async function runChatTurn(
       const text = ok
         ? maskSecrets(outcome.reply ?? outcome.summary ?? '(порожня відповідь)')
         : outcome.denied.length
-          ? `Агентові не дозволено дію: ${outcome.denied.join(', ')}.`
+          ? `Агентові не дозволено дію: ${outcome.denied.join(', ')}.${outcome.denied.includes('read_url') ? ' Мережа агентам не відкрита: посилання (зокрема Figma) вони відкрити не можуть. Прикріпи скріншот фрейма й повтори.' : ''}`
           : `Помилка: ${outcome.error ?? 'невідома'}${outcome.summary ? `\n${maskSecrets(outcome.summary)}` : ''}`;
       run.status = ok ? 'done' : outcome.denied.length ? 'blocked' : 'failed';
       run.endedAt = now().toISOString();

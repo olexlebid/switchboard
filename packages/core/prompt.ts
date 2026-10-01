@@ -19,6 +19,7 @@ Hard rules:
 - Do NOT run git commit, push, merge, rebase, reset, checkout or deploy. The orchestrator commits for you.
 - Do NOT install or remove dependencies and do NOT edit netlify.toml.
 - Do not read or print secrets (.env files, tokens).
+- You have NO network access: never open URLs or fetch web pages (no read_url, web fetch, curl). Links in project files, Figma links included, cannot be opened here: work from the attached screenshots and the text you were given, and if a frame is missing, ask the user to attach a screenshot.
 - If something is missing or unclear (a token, a breakpoint, a color), do not invent it: write it under "Open questions" in PROGRESS.md and continue with the rest.
 
 When you finish, add or update this section in PROGRESS.md (create the file if needed):
@@ -60,7 +61,7 @@ export function extrasPrompt(task: Task, agent: AgentId): string {
 
 /** First-run prompt: preamble plus the task text. */
 export function buildStartPrompt(task: Task, ctx: PromptContext): string {
-  return `${PREAMBLE(task, ctx)}\n\n---\nTASK (${task.type}${task.priority === 'high' ? ', high priority' : ''}):\n\n${task.text.trim()}\n${task.figma ? `\nFigma frame: ${task.figma}\n` : ''}${extrasPrompt(task, ctx.agent)}`;
+  return `${PREAMBLE(task, ctx)}\n\n---\nTASK (${task.type}${task.priority === 'high' ? ', high priority' : ''}):\n\n${task.text.trim()}\n${task.figma ? `\nFigma frame (reference only, you cannot open links): ${task.figma}\n` : ''}${extrasPrompt(task, ctx.agent)}`;
 }
 
 /**
@@ -85,5 +86,5 @@ ${inspect}
 ORIGINAL TASK (${task.type}${task.priority === 'high' ? ', high priority' : ''}):
 
 ${task.text.trim()}
-${task.figma ? `\nFigma frame: ${task.figma}\n` : ''}${extrasPrompt(task, ctx.agent)}`;
+${task.figma ? `\nFigma frame (reference only, you cannot open links): ${task.figma}\n` : ''}${extrasPrompt(task, ctx.agent)}`;
 }

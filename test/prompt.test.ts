@@ -21,6 +21,17 @@ describe('buildStartPrompt', () => {
   });
 });
 
+describe('no network for agents', () => {
+  it('tells the agent not to open links (Figma included) and marks the Figma link as reference only', () => {
+    const ctx = { existing: ['RULES.md'] };
+    for (const agent of ['claude', 'agy'] as const) {
+      const p = buildStartPrompt({ ...task, figma: 'https://www.figma.com/design/x?node-id=1' } as Task, { ...ctx, agent });
+      expect(p).toContain('NO network access');
+      expect(p).toContain('Figma frame (reference only, you cannot open links): https://www.figma.com/design/x?node-id=1');
+    }
+  });
+});
+
 describe('agy denied action details', () => {
   const out = (a: Record<string, unknown>) => interpretOutput('agy', JSON.stringify({ status: 'SUCCESS', response: '', denied_actions: [a] }), '');
   it('shows the attempted command when agy reports it', () => {

@@ -113,6 +113,17 @@ describe('chat turns', () => {
     expect(prompts[1]).not.toContain('Hard rules');
   });
 
+  it('tells every agent it has no network, and explains a denied read_url in plain words', async () => {
+    const cfg = cfgFor('chat', 'readurl');
+    const chat = await createChat({ project, mode: 'agy' });
+    const r = await turn(cfg, chat.id, 'подивись фрейм у Figma');
+    expect(readFileSync(dump, 'utf8')).toContain('NO network access');
+    expect(r.ok).toBe(false);
+    const last = readState().chats[chat.id]!.messages.filter((m) => m.role === 'system').at(-1)!;
+    expect(last.text).toContain('read_url');
+    expect(last.text).toContain('Прикріпи скріншот фрейма');
+  });
+
   it('gives a newly selected agent a transcript, then keeps its own session', async () => {
     const cfg = cfgFor();
     const chat = await createChat({ project });

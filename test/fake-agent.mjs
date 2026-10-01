@@ -4,6 +4,7 @@
 //   success  writes a component + PROGRESS.md and reports success
 //   partial  writes a component, then reports a denied Write
 //   denied   writes nothing, reports a denied Write
+//   readurl  produces no reply, reports a denied read_url (a link the agent may not open)
 //   hang     never finishes (also spawns a child shell to test process-group kill)
 //   error    prints to stderr and exits 1
 //   limit    writes partial work, then fails with a usage-limit message (reset time from FAKE_RESET_AT)
@@ -117,6 +118,9 @@ switch (mode) {
     break;
   case 'denied':
     report({ denied: ['Write'], text: 'Write was denied' });
+    break;
+  case 'readurl':
+    report({ denied: ['read_url'], text: '' });
     break;
   case 'hang':
     spawn('sleep', ['61'], { stdio: 'ignore' });
