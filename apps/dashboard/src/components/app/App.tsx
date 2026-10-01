@@ -13,6 +13,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { useDashboard, useNow, useStoredString } from '@/hooks/use-dashboard';
 import { post, type ActionResult } from '@/lib/api';
 import { DirtyTreeDialog, type Blocked } from './DirtyTreeDialog';
+import { MergeDialog, type MergeTarget } from './MergeDialog';
 import { AgentCard } from './AgentCard';
 import { ChatPanel } from './ChatPanel';
 import { ManualMarks } from './ManualMarks';
@@ -30,6 +31,7 @@ export default function App() {
   const [notice, setNotice] = useState<ActionResult>();
   const [refreshing, setRefreshing] = useState(false);
   const [blocked, setBlocked] = useState<Blocked>();
+  const [mergeTarget, setMergeTarget] = useState<MergeTarget>();
   const noticeTimer = useRef<number>(undefined);
 
   const projects = state?.tasks.projects ?? [];
@@ -123,7 +125,7 @@ export default function App() {
           <div className="relative min-h-[32rem]">
             <div className="absolute inset-0">
               {project ? (
-                <ChatPanel project={project.path} projectName={project.name} chat={state.chat} rules={state.uploads} now={now} onResult={show} reload={reloadAsync} />
+                <ChatPanel project={project.path} projectName={project.name} chat={state.chat} rules={state.uploads} now={now} onResult={show} onMerge={setMergeTarget} reload={reloadAsync} />
               ) : (
                 <NoProjects />
               )}
@@ -133,6 +135,8 @@ export default function App() {
 
         <DirtyTreeDialog blocked={blocked} onClose={() => setBlocked(undefined)} onResult={show} reload={reloadAsync} />
 
+        <MergeDialog target={mergeTarget} onClose={() => setMergeTarget(undefined)} onResult={show} reload={reloadAsync} />
+
         <ManualMarks cards={state.overview.manual} onChange={(id, v) => void mark(id, v)} />
 
         <section aria-label="Задачі" className="grid items-start gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
@@ -141,7 +145,7 @@ export default function App() {
           ) : (
             <NoProjects />
           )}
-          <TaskPanel tasks={state.tasks} rules={state.uploads} now={now} onResult={show} reload={reloadAsync} />
+          <TaskPanel tasks={state.tasks} rules={state.uploads} now={now} onResult={show} onMerge={setMergeTarget} reload={reloadAsync} />
         </section>
       </main>
     </TooltipProvider>

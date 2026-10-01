@@ -28,6 +28,8 @@ export type ChatView = {
   project: string;
   projectName: string;
   branch: string;
+  /** Branch the chat started from; "merge into" targets it. */
+  baseBranch: string;
   mode: 'auto' | AgentId;
   status: Chat['status'];
   waitUntil?: string;
@@ -69,6 +71,7 @@ function viewOf(chat: Chat): ChatView {
     project: chat.project,
     projectName: basename(chat.project),
     branch: chat.branch,
+    baseBranch: chat.baseBranch,
     mode: chat.mode,
     status: chat.status,
     waitUntil: chat.waitUntil,

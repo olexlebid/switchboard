@@ -1,5 +1,5 @@
 // Live task panel: running task with log tail, queue, recent tasks and handover history, as tabs.
-import { Square } from 'lucide-react';
+import { GitMerge, Square } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { UploadRules } from '@core/dashboard-state';
 import type { TaskView, TasksOverview } from '@core/task-overview';
@@ -12,10 +12,11 @@ import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle }
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { post, type OnResult } from '@/lib/api';
+import type { MergeTarget } from './MergeDialog';
 import { ResumeDialog } from './ResumeDialog';
 import { StatusBadge } from './StatusBadge';
 
-type Props = { tasks: TasksOverview; rules: UploadRules; now: number; onResult: OnResult; reload: () => Promise<void> };
+type Props = { tasks: TasksOverview; rules: UploadRules; now: number; onResult: OnResult; onMerge: (t: MergeTarget) => void; reload: () => Promise<void> };
 
 const clock = (iso: string) => new Date(iso).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' });
 const outcome = (t: TaskView) => (t.status === 'done' ? 'ok' : t.status === 'failed' ? 'bad' : 'low');
@@ -24,7 +25,7 @@ function Count({ n }: { n: number }) {
   return n > 0 ? <Badge variant="secondary" className="ml-1 h-4 px-1.5">{n}</Badge> : null;
 }
 
-export function TaskPanel({ tasks, rules, now, onResult, reload }: Props) {
+export function TaskPanel({ tasks, rules, now, onResult, onMerge, reload }: Props) {
   const [tab, setTab] = useState('running');
   // Jump to the "running" tab when a task starts.
   const wasRunning = useRef(false);
@@ -117,7 +118,12 @@ export function TaskPanel({ tasks, rules, now, onResult, reload }: Props) {
                       <ItemDescription>{t.agentTitle ?? '—'} · {t.projectName} · <code>{t.branch}</code></ItemDescription>
                       {t.note && <ItemDescription title={t.note}>{t.note}</ItemDescription>}
                     </ItemContent>
-                    <ItemActions>{t.canResume && resume(t)}</ItemActions>
+                    <ItemActions>
+                      {t.canResume && resume(t)}
+                      {t.status === 'done' && (
+                        <Button variant="outline" size="sm" onClick={() => onMerge({ kind: 'task', id: t.id })}><GitMerge aria-hidden="true" /> Влити в {t.baseBranch}</Button>
+                      )}
+                    </ItemActions>
                   </Item>
                 ))}
               </ItemGroup>

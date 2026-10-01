@@ -1,5 +1,5 @@
 #!/usr/bin/env -S npx tsx
-// Switchboard CLI: status, hook, init, run, resume, queue, unblock, dashboard.
+// Switchboard CLI: status, hook, init, run, resume, merge, queue, unblock, dashboard.
 import { parseArgs } from 'node:util';
 import { renderStatus, renderSummary } from '../packages/core/format';
 import { installHook, uninstallHook } from '../packages/core/hook-install';
@@ -7,6 +7,7 @@ import { loadConfig } from '../packages/core/config';
 import { runDashboard } from '../packages/core/dashboard';
 import { resumeTask, SbError, startTask, type StartResult } from '../packages/core/flow';
 import { addUserMessage, createChat, runChatTurn, setChatMode } from '../packages/core/chat';
+import { mergeFor, previewMergeFor, type MergeKind } from '../packages/core/launch';
 import { initProject } from '../packages/core/init';
 import { notify } from '../packages/core/notify';
 import { getOverview } from '../packages/core/overview';
@@ -31,6 +32,8 @@ const HELP = `Switchboard
                                чат з агентом у терміналі (та сама розмова, що в дашборді; правки йдуть у гілку sb/c-…)
   queue [--run-due]            список задач; --run-due продовжує ті, що чекали скидання ліміту й уже можуть іти
   resume <id> [--agent ...] [--note "відповідь агенту"]   продовжити задачу, що чекає, заблокована або впала
+  merge <id> [--yes]           влити гілку задачі (t-…) або чату (c-…) у main: без --yes лише показує, що буде влито;
+                               з --yes робить git merge --ff-only. Без push і деплою. Запускай лише за прямим проханням власника.
   unblock claude|agy           зняти позначку «ліміт вичерпано» (якщо вона хибна)
   project add|remove|list      проєкти, у яких дешборд може запускати задачі (проєкти з sb run додаються самі)
   notify-test                  перевірити системне сповіщення (macOS)
@@ -212,6 +215,29 @@ async function chatCommand(argv: string[]): Promise<number> {
   return r.ok ? 0 : r.waiting ? 4 : 1;
 }
 
+async function mergeCommand(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { yes: { type: 'boolean' } } });
+  const id = positionals[0] ?? '';
+  const kind: MergeKind | undefined = id.startsWith('t-') ? 'task' : id.startsWith('c-') ? 'chat' : undefined;
+  if (!kind) {
+    console.error('Використання: sb merge <id задачі t-… або чату c-…> [--yes]');
+    return 2;
+  }
+  const cfg = loadConfig();
+  const p = await previewMergeFor(cfg, kind, id);
+  if (!p.ok) { console.error(p.error); return 3; }
+  const v = p.preview!;
+  console.log(`Гілка ${v.branch} → ${v.base}: ${v.commits.length} комітів, ${v.files.length} файлів`);
+  for (const c of v.commits.slice(0, 10)) console.log(`  ${c.sha} ${c.subject}`);
+  if (v.files.length) console.log(`Файли: ${v.files.slice(0, 15).join(', ')}${v.files.length > 15 ? ` (+${v.files.length - 15})` : ''}`);
+  if (!v.canMerge) { console.error(`\nНе можна влити зараз: ${v.reason}`); return 3; }
+  if (!values.yes) { console.log('\nНічого не змінено. Щоб влити (merge --ff-only, без push): додай --yes.'); return 0; }
+  const m = await mergeFor(cfg, kind, id);
+  if (!m.ok) { console.error(m.error); return 3; }
+  console.log(`\n✔ ${m.message}`);
+  return 0;
+}
+
 async function main(): Promise<number> {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
@@ -250,6 +276,8 @@ async function main(): Promise<number> {
     }
     case 'resume':
       return resume(rest);
+    case 'merge':
+      return mergeCommand(rest);
     case 'project': {
       const [sub, path] = rest;
       const { realpathSync, statSync } = await import('node:fs');

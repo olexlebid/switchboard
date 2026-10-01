@@ -5,7 +5,6 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Spinner } from '@/components/ui/spinner';
 import { post, type ActionResult } from '@/lib/api';
 
@@ -52,7 +51,7 @@ export function DirtyTreeDialog({ blocked, onClose, onResult, reload }: Props) {
             Відкладені зміни нікуди не зникають: їх можна повернути командою <code className="rounded bg-muted px-1">git stash pop</code>.
           </DialogDescription>
         </DialogHeader>
-        <ScrollArea className="max-h-60 rounded-md border">
+        <div className="max-h-60 min-w-0 overflow-y-auto rounded-md border">
           <ul className="flex flex-col gap-1 p-3 text-sm" aria-label="Незакомічені файли">
             {blocked?.files.map(parse).map((f) => (
               <li key={f.path} className="flex items-center gap-2">
@@ -61,7 +60,7 @@ export function DirtyTreeDialog({ blocked, onClose, onResult, reload }: Props) {
               </li>
             ))}
           </ul>
-        </ScrollArea>
+        </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>Скасувати</Button>
           <Button onClick={() => void stash()} disabled={busy}>

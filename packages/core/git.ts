@@ -1,5 +1,6 @@
-// Thin git helpers for the runner. Only safe commands: no push --force, reset --hard, merge or rebase.
-// `stash push` is the one command that moves the user's changes, and it is recoverable (`git stash pop`).
+// Thin git helpers for the runner. Only safe commands: no push --force, reset --hard or rebase.
+// `stash push` moves the user's changes aside and is recoverable (`git stash pop`). `merge --ff-only` of an `sb/*`
+// branch exists only for the explicit, user-confirmed "merge into main" action (see merge.ts).
 import { runCommand } from './exec';
 
 export class GitError extends Error {}
@@ -110,6 +111,32 @@ export async function changedFiles(cwd: string, base: string): Promise<string[]>
 export async function pushBranch(cwd: string, branch: string): Promise<void> {
   if (!branch.startsWith('sb/')) throw new GitError(`refusing to push non-task branch "${branch}"`);
   await gitOk(cwd, ['push', '-u', 'origin', branch]);
+}
+
+export type BranchCommit = { sha: string; subject: string };
+
+/** Commits on `branch` that `base` does not have yet, newest first. */
+export async function commitsAhead(cwd: string, base: string, branch: string): Promise<BranchCommit[]> {
+  const out = await gitOk(cwd, ['log', '--format=%h%x09%s', `${base}..${branch}`]);
+  return out ? out.split('\n').map((l) => { const [sha = '', ...rest] = l.split('\t'); return { sha, subject: rest.join('\t') }; }) : [];
+}
+
+/** Files changed on `branch` since it left `base`. */
+export async function filesAhead(cwd: string, base: string, branch: string): Promise<string[]> {
+  const out = await gitOk(cwd, ['diff', '--name-only', `${base}...${branch}`]);
+  return out ? out.split('\n') : [];
+}
+
+/** True when `ancestor` is contained in `descendant` (so a fast-forward is possible). */
+export async function isAncestor(cwd: string, ancestor: string, descendant: string): Promise<boolean> {
+  return (await git(cwd, ['merge-base', '--is-ancestor', ancestor, descendant])).code === 0;
+}
+
+/** Fast-forwards the checked out branch to the task/chat branch. Never creates a merge commit, never forces. */
+export async function mergeFastForward(cwd: string, branch: string): Promise<string> {
+  if (!branch.startsWith('sb/')) throw new GitError(`refusing to merge non-task branch "${branch}"`);
+  await gitOk(cwd, ['merge', '--ff-only', branch]);
+  return headSha(cwd);
 }
 
 /** Stages everything (including new files). */

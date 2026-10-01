@@ -24,6 +24,7 @@ export type TaskView = {
   project: string;
   projectName: string;
   branch: string;
+  baseBranch: string;
   agent?: AgentId;
   agentTitle?: string;
   status: TaskStatus;
@@ -143,6 +144,7 @@ function view(t: Task): TaskView {
     project: t.project,
     projectName: basename(t.project),
     branch: t.branch,
+    baseBranch: t.baseBranch,
     agent: t.agent,
     agentTitle: t.agent ? AGENT_TITLES[t.agent] : undefined,
     status: t.status,

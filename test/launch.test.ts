@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig } from '../packages/core/config';
 import { getChatOverview, selectChat } from '../packages/core/chat-overview';
-import { isSbProcess, launchTask, newChatFromDashboard, resumeFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, stashProjectChanges, stopChat, stopTask, validateLaunch } from '../packages/core/launch';
+import { isSbProcess, launchTask, mergeFor, newChatFromDashboard, previewMergeFor, resumeFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, stashProjectChanges, stopChat, stopTask, validateLaunch } from '../packages/core/launch';
 import { renderMarkdown } from '../packages/core/markdown';
 import { addProject, readState, saveRun, saveTask } from '../packages/core/store';
 import { allowedProjects, getTasksOverview, matchAllowedProject, tailFile } from '../packages/core/task-overview';
@@ -279,6 +279,83 @@ describe('a dirty working tree is resolved from the dashboard', () => {
     const r = await stashProjectChanges(cfg(), other);
     expect(r.ok).toBe(false);
     expect(existsSync(join(other, 'x.txt'))).toBe(true);
+  });
+});
+
+describe('merge into the base branch (owner-confirmed, fast-forward only)', () => {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: project, encoding: 'utf8' }).trim();
+  const cfg = () => parseConfig(readFileSync(process.env.SB_CONFIG!, 'utf8'));
+
+  /** A chat whose branch has one commit that main does not have; the project is back on main. */
+  async function chatWithWork(): Promise<{ id: string; branch: string }> {
+    const created = await newChatFromDashboard(cfg(), project, 'auto');
+    const id = created.ok ? created.chatId! : '';
+    const branch = readState().chats[id]!.branch;
+    git('checkout', '-q', '-b', branch);
+    writeFileSync(join(project, 'About.astro'), '<h2>Das Team seid Ihr.</h2>\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'chat(sb): heading on one line');
+    git('checkout', '-q', 'main');
+    return { id, branch };
+  }
+
+  it('previews the commits and files, merges with --ff-only and does not touch any remote', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    const { id, branch } = await chatWithWork();
+    const before = git('rev-parse', 'main');
+    const p = await previewMergeFor(cfg(), 'chat', id);
+    expect(p.ok && p.preview?.canMerge).toBe(true);
+    expect(p.ok && p.preview?.commits.map((c) => c.subject)).toEqual(['chat(sb): heading on one line']);
+    expect(p.ok && p.preview?.files).toEqual(['About.astro']);
+    expect(git('rev-parse', 'main')).toBe(before); // a preview changes nothing
+
+    const m = await mergeFor(cfg(), 'chat', id);
+    expect(m.ok).toBe(true);
+    expect(git('rev-parse', 'main')).toBe(git('rev-parse', branch));
+    expect(git('rev-list', '--merges', '--count', 'main')).toBe('0'); // fast-forward: no merge commit
+    expect(readFileSync(join(project, 'About.astro'), 'utf8')).toContain('Das Team');
+    // merging twice has nothing left to do
+    const again = await mergeFor(cfg(), 'chat', id);
+    expect(again.ok).toBe(false);
+  });
+
+  it('refuses when main moved on, when the project is on another branch, and when the tree is dirty', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    const { id } = await chatWithWork();
+    const before = git('rev-parse', 'main');
+
+    writeFileSync(join(project, 'notes.txt'), 'mine');
+    const dirty = await mergeFor(cfg(), 'chat', id);
+    expect(dirty.ok).toBe(false);
+    if (!dirty.ok) expect(dirty.error).toMatch(/не чисте/);
+    rmSync(join(project, 'notes.txt'));
+
+    git('checkout', '-q', '-b', 'feature');
+    const elsewhere = await mergeFor(cfg(), 'chat', id);
+    expect(elsewhere.ok).toBe(false);
+    if (!elsewhere.ok) expect(elsewhere.error).toMatch(/а не на main/);
+    git('checkout', '-q', 'main');
+
+    writeFileSync(join(project, 'other.txt'), 'x');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'main moved on');
+    const moved = git('rev-parse', 'main');
+    const diverged = await mergeFor(cfg(), 'chat', id);
+    expect(diverged.ok).toBe(false);
+    if (!diverged.ok) expect(diverged.error).toMatch(/fast-forward/);
+    expect(git('rev-parse', 'main')).toBe(moved);
+    expect(moved).not.toBe(before);
+  });
+
+  it('refuses unknown ids and non-sb branches', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    expect((await mergeFor(cfg(), 'chat', 'c-nope')).ok).toBe(false);
+    expect((await mergeFor(cfg(), 'task', 't-nope')).ok).toBe(false);
+    const { previewMerge } = await import('../packages/core/merge');
+    git('branch', 'feature');
+    const p = await previewMerge(project, 'feature', 'main');
+    expect(p.canMerge).toBe(false);
+    expect(p.reason).toMatch(/sb\/\*/);
   });
 });
 

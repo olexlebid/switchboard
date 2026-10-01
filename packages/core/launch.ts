@@ -8,6 +8,7 @@ import { saveAttachments, type IncomingFile } from './attachments';
 import { addUserMessage, busyWith, createChat, setChatMode } from './chat';
 import { SbError } from './errors';
 import { blockingDirtyFiles, currentBranch, stashDirty, summarizeDirty } from './git';
+import { mergeBranch, previewMerge, type MergePreview } from './merge';
 import { defaultConfigPath } from './config';
 import { maskSecrets } from './mask';
 import { readState, runsDir } from './store';
@@ -246,6 +247,44 @@ export async function stashProjectChanges(cfg: SwitchboardConfig, projectInput: 
     const stashed = await stashDirty(project, `sb: auto-stash before agent run ${stamp}`);
     if (!stashed) return { ok: true, message: 'Дерево вже чисте.' };
     return { ok: true, message: `Відкладено ${before} змін у git stash. Повернути пізніше: git stash pop (у теці проєкту).` };
+  } catch (e) {
+    return failFrom(e);
+  }
+}
+
+// ---------------------------------------------------------------- merge into the base branch (owner-confirmed)
+
+export type MergeKind = 'task' | 'chat';
+export type MergeResult = LaunchResult & { preview?: MergePreview };
+
+function mergeTarget(cfg: SwitchboardConfig, kind: MergeKind, id: string): { project: string; branch: string; base: string } | LaunchResult {
+  const s = readState();
+  const item = kind === 'task' ? s.tasks[id] : s.chats[id];
+  if (!item) return fail(kind === 'task' ? 'Задачі не існує.' : 'Чату не існує.', 404);
+  if (!matchAllowedProject(cfg, item.project)) return fail('Проєкт недоступний.', 409);
+  if (projectBusy(item.project)) return fail('У цьому проєкті зараз працює агент: дочекайся завершення.', 409);
+  return { project: item.project, branch: item.branch, base: item.baseBranch };
+}
+
+/** What would be merged (commits, files) and whether it can be done right now. Changes nothing. */
+export async function previewMergeFor(cfg: SwitchboardConfig, kind: MergeKind, id: string): Promise<MergeResult> {
+  const t = mergeTarget(cfg, kind, id);
+  if ('ok' in t) return t;
+  try {
+    return { ok: true, message: '', preview: await previewMerge(t.project, t.branch, t.base) };
+  } catch (e) {
+    return failFrom(e);
+  }
+}
+
+/** Fast-forwards the base branch to the task/chat branch. Call only after the owner confirmed. No push, no deploy. */
+export async function mergeFor(cfg: SwitchboardConfig, kind: MergeKind, id: string): Promise<MergeResult> {
+  const t = mergeTarget(cfg, kind, id);
+  if ('ok' in t) return t;
+  try {
+    const { preview, sha } = await mergeBranch(t.project, t.branch, t.base);
+    const n = preview.commits.length;
+    return { ok: true, message: `Влито в ${preview.base}: ${n} ${n === 1 ? 'коміт' : 'комітів'} з ${preview.branch} (тепер ${sha.slice(0, 7)}). На віддалений репозиторій нічого не відправлено.`, preview };
   } catch (e) {
     return failFrom(e);
   }

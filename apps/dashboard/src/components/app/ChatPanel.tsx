@@ -1,6 +1,6 @@
 // The chat: conversation with an agent that may edit project files (branch sb/c-…), mode switch, history,
 // attachments, stop button. Replies are rendered from the server's safe markdown subset.
-import { FilePen, MessageSquarePlus, RotateCcw, Send, Square } from 'lucide-react';
+import { FilePen, GitMerge, MessageSquarePlus, RotateCcw, Send, Square } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessageView, ChatOverview } from '@core/chat-overview';
 import type { UploadRules } from '@core/dashboard-state';
@@ -18,6 +18,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { post, type ActionResult, type OnResult } from '@/lib/api';
 import { cn } from 'cn';
 import { AttachButton, AttachChips, dropHandlers } from './AttachPicker';
+import type { MergeTarget } from './MergeDialog';
 
 type Props = {
   project: string;
@@ -26,6 +27,7 @@ type Props = {
   rules: UploadRules;
   now: number;
   onResult: OnResult;
+  onMerge: (t: MergeTarget) => void;
   reload: () => Promise<void>;
 };
 
@@ -66,7 +68,7 @@ function Message({ m }: { m: ChatMessageView }) {
   );
 }
 
-export function ChatPanel({ project, projectName, chat, rules, now, onResult, reload }: Props) {
+export function ChatPanel({ project, projectName, chat, rules, now, onResult, onMerge, reload }: Props) {
   const active = chat?.active;
   const [text, setText] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -101,6 +103,7 @@ export function ChatPanel({ project, projectName, chat, rules, now, onResult, re
       if (!created.ok) { onResult(created); setSending(false); return; }
       chatId = created.chatId;
     }
+    if (!chatId) { onResult({ ok: false, error: 'Не вдалося створити чат.' }); setSending(false); return; }
     await sendTo(chatId);
     setSending(false);
   };
@@ -119,9 +122,14 @@ export function ChatPanel({ project, projectName, chat, rules, now, onResult, re
       <CardHeader>
         <CardTitle><h2 className="text-base font-medium">Чат · {projectName}</h2></CardTitle>
         <CardDescription>
-          {active ? <>Гілка <code className="rounded bg-muted px-1">{active.branch}</code> · у main нічого не мержиться</> : 'Напиши повідомлення, щоб почати розмову.'}
+          {active ? <>Гілка <code className="rounded bg-muted px-1">{active.branch}</code> · у {active.baseBranch} потрапляє лише після твого «Влити»</> : 'Напиши повідомлення, щоб почати розмову.'}
         </CardDescription>
         <CardAction className="flex items-center gap-2">
+          {active && active.messages.some((m) => m.role === 'agent') && (
+            <Button variant="outline" size="sm" disabled={running || sending} onClick={() => onMerge({ kind: 'chat', id: active.id })}>
+              <GitMerge aria-hidden="true" /> Влити в {active.baseBranch}
+            </Button>
+          )}
           {chat && chat.chats.length > 0 && (
             <Select value={active?.id} onValueChange={(id) => void act({ op: 'select', chat: id })}>
               <SelectTrigger size="sm" className="w-44" aria-label="Історія чатів"><SelectValue placeholder="Історія" /></SelectTrigger>

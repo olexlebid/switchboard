@@ -1,6 +1,8 @@
+import type { MergePreview } from '@core/merge';
+
 // Browser-side helper for the dashboard's POST endpoints (multipart, so files can travel along).
 /** `blocked`: uncommitted files that stop the action; the dashboard offers to stash them and repeat. */
-export type ActionResult = { ok: boolean; message?: string; error?: string; chatId?: string; blocked?: { project: string; files: string[] } };
+export type ActionResult = { ok: boolean; message?: string; error?: string; chatId?: string; blocked?: { project: string; files: string[] }; preview?: MergePreview };
 /** Reports an action's result; `retry` repeats the action (used after the user clears a blocked tree). */
 export type OnResult = (r: ActionResult, retry?: () => void) => void;
 
@@ -11,7 +13,7 @@ export async function post(url: string, data: Record<string, string | undefined>
   try {
     const res = await fetch(url, { method: 'POST', body, headers: { accept: 'application/json' } });
     const payload = (await res.json().catch(() => undefined)) as Partial<ActionResult> | undefined;
-    if (!res.ok) return { ok: false, error: payload?.error ?? `Помилка ${res.status}`, blocked: payload?.blocked };
+    if (!res.ok) return { ok: false, error: payload?.error ?? `Помилка ${res.status}`, blocked: payload?.blocked, preview: payload?.preview };
     return { ok: true, ...payload };
   } catch {
     return { ok: false, error: 'Немає зв’язку із сервером Switchboard.' };
