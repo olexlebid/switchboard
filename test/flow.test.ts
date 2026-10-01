@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -215,16 +215,33 @@ describe('interpretOutput', () => {
 });
 
 describe('initProject', () => {
-  it('creates the scaffolding and never overwrites existing files', () => {
-    writeFileSync(join(project, 'CLAUDE.md'), 'my own rules\n');
+  it('creates the scaffolding in a new project and never overwrites existing files', () => {
+    writeFileSync(join(project, 'AGENTS.md'), 'my agents file\n');
     const r = initProject(project);
-    expect(r.created).toEqual(expect.arrayContaining(['RULES.md', 'DESIGN.md', 'AGENTS.md']));
-    expect(r.skipped).toContain('CLAUDE.md');
-    expect(r.warnings.join(' ')).toMatch(/@RULES\.md/);
-    expect(readFileSync(join(project, 'CLAUDE.md'), 'utf8')).toBe('my own rules\n');
+    expect(r.mode).toBe('new');
+    expect(r.created).toEqual(expect.arrayContaining(['RULES.md', 'DESIGN.md', 'CLAUDE.md']));
+    expect(r.skipped).toContain('AGENTS.md');
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toBe('my agents file\n');
     expect(existsSync(join(project, '.sb/tasks/.gitkeep'))).toBe(true);
-    const again = initProject(project);
-    expect(again.created).toEqual([]);
+    expect(initProject(project).created).toEqual([]);
+  });
+
+  it('an existing project with its own CLAUDE.md gets thin pointer files, not TODO templates', () => {
+    writeFileSync(join(project, 'CLAUDE.md'), 'my own rules\n');
+    mkdirSync(join(project, 'src/styles'), { recursive: true });
+    writeFileSync(join(project, 'src/styles/tokens.css'), ':root {}\n');
+    const r = initProject(project);
+    expect(r.mode).toBe('existing');
+    expect(r.created).toEqual(expect.arrayContaining(['RULES.md', 'DESIGN.md', 'AGENTS.md']));
+    expect(r.created).not.toContain('CLAUDE.md');
+    expect(readFileSync(join(project, 'CLAUDE.md'), 'utf8')).toBe('my own rules\n');
+    const rules = readFileSync(join(project, 'RULES.md'), 'utf8');
+    expect(rules).toContain('CLAUDE.md');
+    expect(rules).toMatch(/Do NOT create branches, commit/);
+    expect(rules).not.toContain('TODO');
+    expect(readFileSync(join(project, 'DESIGN.md'), 'utf8')).toContain('src/styles/tokens.css');
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toContain('CLAUDE.md');
+    expect(initProject(project).created).toEqual([]);
   });
 });
 

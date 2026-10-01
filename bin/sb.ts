@@ -305,7 +305,11 @@ async function main(): Promise<number> {
       for (const f of r.created) console.log(`  створено   ${f}`);
       for (const f of r.skipped) console.log(`  пропущено  ${f} (вже є)`);
       for (const w of r.warnings) console.log(`  ! ${w}`);
-      console.log('Заповни TODO в RULES.md і DESIGN.md: це все, що агенти знають про проєкт.');
+      console.log(
+        r.mode === 'existing'
+          ? 'Знайшов власний CLAUDE.md проєкту: RULES.md, DESIGN.md і AGENTS.md лише вказують на нього, TODO заповнювати не треба.'
+          : 'Заповни TODO в RULES.md і DESIGN.md: це все, що агенти знають про проєкт.',
+      );
       console.log('Потім закоміть ці файли: `sb run` не стартує, поки робоче дерево не чисте.');
       return 0;
     }

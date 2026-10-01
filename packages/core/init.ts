@@ -62,17 +62,63 @@ Read RULES.md (project rules) and DESIGN.md (design tokens) before writing any c
 Task details are in .sb/tasks/ and progress notes are in PROGRESS.md.
 `;
 
-export type InitResult = { created: string[]; skipped: string[]; warnings: string[] };
+// ---- existing projects: the project already has its own CLAUDE.md, so the shared files only point to it.
+
+/** Where a project usually keeps its design tokens (first match wins). */
+const TOKEN_FILES = ['src/styles/tokens.css', 'src/styles/variables.css', 'src/styles/global.css', 'tailwind.config.mjs', 'tailwind.config.ts', 'tailwind.config.js'];
+
+const POINTER_RULES = `# Project rules
+
+The full project rules live in **CLAUDE.md**. Read it completely before any task and follow it
+(stack, naming, code style, language rules, quality bar).
+
+## Switchboard overrides
+You run headless, started by the Switchboard orchestrator. Where CLAUDE.md talks about workflow, these
+rules win:
+- Work on the git branch you are on (\`sb/...\`). Do NOT create branches, commit, push, merge or deploy:
+  the orchestrator commits for you. CLAUDE.md lines like "commit straight to main" or "pull first" do not apply.
+- Nobody is available to answer while you work: do not wait for approval or ask for a plan sign-off.
+  If something is missing or unclear, write it under "Open questions" in PROGRESS.md and continue.
+- Do not install or remove dependencies and do not edit netlify.toml or .env files.
+`;
+
+const pointerDesign = (tokenFile: string | undefined) => `# Design
+
+The design system and tokens are described in **CLAUDE.md**${tokenFile ? ` and defined in \`${tokenFile}\`` : ''}.
+Use the existing tokens only: no hard-coded colors, sizes or spacing.
+If a state, breakpoint or animation is not described and not visible in the attached screenshots,
+do not invent it: list it under "Open questions" in PROGRESS.md.
+`;
+
+const POINTER_AGENTS = `# Agent instructions
+
+Read CLAUDE.md (full project rules), then RULES.md (how to behave under the Switchboard orchestrator)
+and DESIGN.md (where the design tokens live) before writing any code.
+Task details are in .sb/tasks/ and progress notes are in PROGRESS.md.
+`;
+
+export type InitResult = { created: string[]; skipped: string[]; warnings: string[]; mode: 'new' | 'existing' };
 
 export function initProject(project: string): InitResult {
-  const result: InitResult = { created: [], skipped: [], warnings: [] };
-  const files: [string, string][] = [
-    ['RULES.md', RULES_MD],
-    ['DESIGN.md', DESIGN_MD],
-    ['CLAUDE.md', CLAUDE_MD],
-    ['AGENTS.md', AGENTS_MD],
-    [join('.sb', 'tasks', '.gitkeep'), ''],
-  ];
+  // A project that already has its own CLAUDE.md (and no RULES.md yet) is an existing project:
+  // create thin pointer files instead of TODO templates, so every agent learns the real rules.
+  const existing = existsSync(join(project, 'CLAUDE.md')) && !existsSync(join(project, 'RULES.md'));
+  const result: InitResult = { created: [], skipped: [], warnings: [], mode: existing ? 'existing' : 'new' };
+  const tokenFile = TOKEN_FILES.find((f) => existsSync(join(project, f)));
+  const files: [string, string][] = existing
+    ? [
+        ['RULES.md', POINTER_RULES],
+        ['DESIGN.md', pointerDesign(tokenFile)],
+        ['AGENTS.md', POINTER_AGENTS],
+        [join('.sb', 'tasks', '.gitkeep'), ''],
+      ]
+    : [
+        ['RULES.md', RULES_MD],
+        ['DESIGN.md', DESIGN_MD],
+        ['CLAUDE.md', CLAUDE_MD],
+        ['AGENTS.md', AGENTS_MD],
+        [join('.sb', 'tasks', '.gitkeep'), ''],
+      ];
   for (const [rel, content] of files) {
     const path = join(project, rel);
     if (existsSync(path)) {
@@ -83,7 +129,8 @@ export function initProject(project: string): InitResult {
     writeFileSync(path, content);
     result.created.push(rel);
   }
-  if (result.skipped.includes('CLAUDE.md')) {
+  if (existing && !tokenFile) result.warnings.push('Не знайшов файл з токенами дизайну (src/styles/tokens.css тощо): DESIGN.md посилається лише на CLAUDE.md.');
+  if (result.skipped.includes('CLAUDE.md') && !existing) {
     result.warnings.push('CLAUDE.md already exists: add the line `@RULES.md` to it so Claude Code loads the shared rules.');
   }
   if (result.skipped.includes('AGENTS.md')) {
