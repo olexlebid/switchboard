@@ -31,7 +31,7 @@ const TYPE_LABEL: Record<string, string> = {
   <form class="form" method="post" action="/api/tasks" data-async data-task-form>
     <div class="field">
       <label for="task-text">Що зробити</label>
-      <textarea id="task-text" name="text" rows="5" maxlength="5000" required placeholder="Наприклад: зроби секцію Features за DESIGN.md, мобільна версія спочатку"></textarea>
+      <textarea id="task-text" name="text" rows="3" maxlength="5000" required placeholder="Наприклад: зроби секцію Features за DESIGN.md, мобільна версія спочатку"></textarea>
     </div>
     <div class="form__row">
       <div class="field">
@@ -41,18 +41,18 @@ const TYPE_LABEL: Record<string, string> = {
         </select>
       </div>
       <div class="field">
-        <label for="task-project">Проєкт</label>
-        <select id="task-project" name="project" required disabled={projects.length === 0}>
-          {projects.map((p) => <option value={p.path} title={p.path}>{p.name}</option>)}
-        </select>
-      </div>
-      <div class="field">
         <label for="task-priority">Пріоритет</label>
         <select id="task-priority" name="priority">
           <option value="normal">звичайний</option>
           <option value="high">високий</option>
         </select>
       </div>
+    </div>
+    <div class="field">
+      <label for="task-project">Проєкт</label>
+      <select id="task-project" name="project" required disabled={projects.length === 0}>
+        {projects.map((p) => <option value={p.path} title={p.path}>{p.name}</option>)}
+      </select>
     </div>
     <div class="field">
       <label for="task-figma">Figma-фрейм <span class="field__opt">(необов’язково)</span></label>

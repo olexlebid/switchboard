@@ -13,13 +13,16 @@ const leftText = (iso: string) => {
   const left = Date.parse(iso) - Date.now();
   return left > 0 ? formatDuration(left) : 'вже можна продовжити';
 };
+const handoffs = tasks.handoffs.slice(0, 4);
+const recent = tasks.recent.slice(0, 5);
 const elapsed = (t: TaskView) => (t.startedAt ? formatDuration(Date.now() - Date.parse(t.startedAt)) : '');
 ---
 
 <div class="live" data-has-running={tasks.hasRunning ? '' : undefined}>
-  <section class="panel" aria-labelledby="running-title">
+  <div class="live__col">
+  <section class:list={['panel', tasks.running.length === 0 && 'panel--empty']} aria-labelledby="running-title">
     <h3 class="panel__title" id="running-title">Виконується</h3>
-    {tasks.running.length === 0 && <p class="panel__hint">Зараз нічого не виконується.</p>}
+    {tasks.running.length === 0 && <p class="panel__hint">нічого не виконується</p>}
     {
       tasks.running.map((t) => (
         <article class="task task--running" aria-labelledby={`task-${t.id}`}>
@@ -39,7 +42,7 @@ const elapsed = (t: TaskView) => (t.startedAt ? formatDuration(Date.now() - Date
             <form class="task__actions" method="post" action="/api/task-action" data-async>
               <input type="hidden" name="id" value={t.id} />
               <input type="hidden" name="op" value="stop" />
-              <button class="btn" type="submit">Зупинити</button>
+              <button class="btn btn--sm" type="submit">Зупинити</button>
             </form>
           )}
         </article>
@@ -47,9 +50,28 @@ const elapsed = (t: TaskView) => (t.startedAt ? formatDuration(Date.now() - Date
     }
   </section>
 
-  <section class="panel" aria-labelledby="queue-title">
+  <section class:list={['panel', handoffs.length === 0 && 'panel--empty']} aria-labelledby="handoffs-title">
+    <h3 class="panel__title" id="handoffs-title">Історія передач</h3>
+    {handoffs.length === 0 && <p class="panel__hint">Передач ще не було.</p>}
+    <ul class="list">
+      {
+        handoffs.map((h) => (
+          <li class="list__item">
+            <div class="list__main">
+              <span>{h.text}</span>
+              <span class="list__sub">{h.taskTitle}</span>
+            </div>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  </div>
+  <div class="live__col">
+  <section class:list={['panel', tasks.waiting.length === 0 && 'panel--empty']} aria-labelledby="queue-title">
     <h3 class="panel__title" id="queue-title">Черга</h3>
-    {tasks.waiting.length === 0 && <p class="panel__hint">Нічого не чекає на скидання ліміту.</p>}
+    {tasks.waiting.length === 0 && <p class="panel__hint">нічого не чекає</p>}
     <ul class="list">
       {
         tasks.waiting.map((t) => (
@@ -67,7 +89,7 @@ const elapsed = (t: TaskView) => (t.startedAt ? formatDuration(Date.now() - Date
               <form method="post" action="/api/task-action" data-async>
                 <input type="hidden" name="id" value={t.id} />
                 <input type="hidden" name="op" value="resume" />
-                <button class="btn" type="submit">Продовжити</button>
+                <button class="btn btn--sm" type="submit">Продовжити</button>
               </form>
             )}
           </li>
@@ -76,29 +98,12 @@ const elapsed = (t: TaskView) => (t.startedAt ? formatDuration(Date.now() - Date
     </ul>
   </section>
 
-  <section class="panel" aria-labelledby="handoffs-title">
-    <h3 class="panel__title" id="handoffs-title">Історія передач</h3>
-    {tasks.handoffs.length === 0 && <p class="panel__hint">Передач між агентами ще не було.</p>}
-    <ul class="list">
-      {
-        tasks.handoffs.map((h) => (
-          <li class="list__item">
-            <div class="list__main">
-              <span>{h.text}</span>
-              <span class="list__sub">{h.taskTitle}</span>
-            </div>
-          </li>
-        ))
-      }
-    </ul>
-  </section>
-
-  <section class="panel" aria-labelledby="recent-title">
+  <section class:list={['panel', recent.length === 0 && 'panel--empty']} aria-labelledby="recent-title">
     <h3 class="panel__title" id="recent-title">Останні задачі</h3>
-    {tasks.recent.length === 0 && <p class="panel__hint">Завершених задач ще немає.</p>}
+    {recent.length === 0 && <p class="panel__hint">Завершених ще немає.</p>}
     <ul class="list">
       {
-        tasks.recent.map((t) => (
+        recent.map((t) => (
           <li class="list__item">
             <div class="list__main">
               <span>
@@ -108,13 +113,13 @@ const elapsed = (t: TaskView) => (t.startedAt ? formatDuration(Date.now() - Date
                 <strong>{t.title}</strong>
               </span>
               <span class="list__sub">{t.agentTitle ?? '—'} · {t.projectName} · <code>{t.branch}</code></span>
-              {t.note && <span class="list__sub">{t.note}</span>}
+              {t.note && <span class="list__sub list__sub--clamp" title={t.note}>{t.note}</span>}
             </div>
             {t.canResume && (
               <form method="post" action="/api/task-action" data-async>
                 <input type="hidden" name="id" value={t.id} />
                 <input type="hidden" name="op" value="resume" />
-                <button class="btn" type="submit">Продовжити</button>
+                <button class="btn btn--sm" type="submit">Продовжити</button>
               </form>
             )}
           </li>
@@ -122,4 +127,5 @@ const elapsed = (t: TaskView) => (t.startedAt ? formatDuration(Date.now() - Date
       }
     </ul>
   </section>
+  </div>
 </div>

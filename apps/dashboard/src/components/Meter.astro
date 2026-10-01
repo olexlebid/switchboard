@@ -1,5 +1,5 @@
 ---
-// One usage window: label, percent, progress bar (role=progressbar) and a live reset countdown.
+// One usage window on a single line: label, progress bar (role=progressbar), percent and reset countdown.
 import { formatDuration } from '@core/time';
 import type { Thresholds } from '@core/types';
 
@@ -27,10 +27,7 @@ const valueText = known
 ---
 
 <div class="meter">
-  <div class="meter__row">
-    <span class="meter__label" id={`${id}-label`}>{label}</span>
-    <span class="meter__value">{known ? `${rounded}%` : '—'}</span>
-  </div>
+  <span class="meter__label" id={`${id}-label`}>{label}</span>
   <div
     class:list={['meter__track', `meter__track--${level}`]}
     role="progressbar"
@@ -42,12 +39,15 @@ const valueText = known
   >
     <div class="meter__fill" style={`width: ${width}%`}></div>
   </div>
-  {
-    resetsAt && (
-      <p class="meter__reset">
-        <span aria-hidden="true">↻</span> <span class="visually-hidden">скидання через </span>
-        <span data-countdown={resetsAt}>{countdown}</span>
-      </p>
-    )
-  }
+  <span class="meter__value">{known ? `${rounded}%` : '—'}</span>
+  <span class="meter__reset">
+    {
+      resetsAt && (
+        <>
+          <span aria-hidden="true">↻</span> <span class="visually-hidden">скидання через </span>
+          <span data-countdown={resetsAt}>{countdown}</span>
+        </>
+      )
+    }
+  </span>
 </div>

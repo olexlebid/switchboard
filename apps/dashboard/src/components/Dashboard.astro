@@ -44,10 +44,9 @@ const clock = updated.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-
 
 {
   overview.manual.length > 0 && (
-    <section aria-labelledby="manual-heading" class="manual">
-      <h2 class="manual__title" id="manual-heading">Ручні позначки</h2>
-      <p class="manual__hint">Для сервісів без API. У роутингу не беруть участі.</p>
-      <div class="grid">{overview.manual.map((card) => <ManualCard card={card} />)}</div>
+    <section class="manual" aria-labelledby="manual-heading">
+      <h2 class="manual__title" id="manual-heading" title="Для сервісів без API. У роутингу не беруть участі.">Ручні позначки</h2>
+      <div class="manual__items">{overview.manual.map((card) => <ManualCard card={card} />)}</div>
     </section>
   )
 }

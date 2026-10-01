@@ -1,5 +1,5 @@
 ---
-// Optional hand-set card for a service without any API (not used by the router).
+// Optional hand-set mark for a service without any API (not used by the router); one slim row item.
 import type { ManualCardOverview } from '@core/overview';
 
 interface Props {
@@ -10,21 +10,16 @@ const label = card.state === 'exhausted' ? 'вичерпано' : card.state ===
 const when = card.at ? new Date(card.at).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' }) : '';
 ---
 
-<article class:list={['card', 'card--manual', card.state === 'exhausted' && 'card--exhausted']} aria-labelledby={`manual-${card.id}`}>
-  <header class="card__head">
-    <div class="card__id">
-      <h2 class="card__title" id={`manual-${card.id}`}>{card.title}</h2>
-      <p class="card__account">ручна позначка, без API</p>
-    </div>
-    <span class:list={['badge', card.state === 'exhausted' ? 'badge--exhausted' : card.state ? 'badge--available' : 'badge--unknown']}>
-      <span class="badge__dot" aria-hidden="true"></span>
-      <span class="visually-hidden">Статус: </span>{label}
-    </span>
-  </header>
-  <form class="card__actions" method="post" action="/api/manual" data-async>
+<div class:list={['manual__item', card.state === 'exhausted' && 'manual__item--exhausted']} role="group" aria-labelledby={`manual-${card.id}`}>
+  <span class="manual__name" id={`manual-${card.id}`}>{card.title}</span>
+  <span class:list={['badge', 'badge--sm', card.state === 'exhausted' ? 'badge--exhausted' : card.state ? 'badge--available' : 'badge--unknown']}>
+    <span class="badge__dot" aria-hidden="true"></span>
+    <span class="visually-hidden">Статус: </span>{label}
+  </span>
+  <form class="manual__actions" method="post" action="/api/manual" data-async>
     <input type="hidden" name="id" value={card.id} />
-    <button class="btn" type="submit" name="state" value="available" aria-pressed={card.state === 'available'}>Доступно</button>
-    <button class="btn" type="submit" name="state" value="exhausted" aria-pressed={card.state === 'exhausted'}>Вичерпано</button>
+    <button class="btn btn--sm" type="submit" name="state" value="available" aria-pressed={card.state === 'available'}>Доступно</button>
+    <button class="btn btn--sm" type="submit" name="state" value="exhausted" aria-pressed={card.state === 'exhausted'}>Вичерпано</button>
   </form>
-  {when && <p class="card__foot"><span>Позначено: <time datetime={card.at}>{when}</time></span></p>}
-</article>
+  {when && <time class="manual__when" datetime={card.at}>{when}</time>}
+</div>
