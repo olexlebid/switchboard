@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs the Switchboard CLI from ANY directory (the project you are working in keeps being the cwd).
+# Usage: /path/to/switchboard/bin/sb <command> [options]
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+export SB_CONFIG="${SB_CONFIG:-$ROOT/switchboard.config.yaml}"
+exec "$ROOT/node_modules/.bin/tsx" "$ROOT/bin/sb.ts" "$@"
