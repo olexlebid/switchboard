@@ -34,6 +34,18 @@ export function lastJsonObject(text: string): Record<string, unknown> | undefine
 const cut = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, MAX_SUMMARY) : undefined;
 
+/** "command" or, when agy tells us what it tried, "command: ls -la" (field names are not documented). */
+function describeDenied(a: unknown): string {
+  const o = (a ?? {}) as Record<string, unknown>;
+  const name = String(o.action ?? 'unknown');
+  for (const key of ['command', 'command_line', 'cmd', 'target', 'path', 'file', 'args', 'input', 'detail', 'description']) {
+    const v = o[key];
+    if (key === 'command' && v === name) continue;
+    if (typeof v === 'string' && v.trim()) return `${name}: ${v.trim().replace(/\s+/g, ' ').slice(0, 120)}`;
+  }
+  return name;
+}
+
 export function interpretOutput(agent: AgentId, stdout: string, stderr: string): Outcome {
   const json = lastJsonObject(stdout) ?? lastJsonObject(stderr);
   if (!json) return { ok: false, denied: [], error: 'no JSON result in the agent output' };
@@ -53,7 +65,7 @@ export function interpretOutput(agent: AgentId, stdout: string, stderr: string):
 
   // agy: {"status":"SUCCESS","response":"...","denied_actions":[{"action":"write_file",...}]}
   const actions = Array.isArray(json.denied_actions) ? json.denied_actions : [];
-  const denied = actions.map((a) => String((a as { action?: unknown }).action ?? 'unknown'));
+  const denied = actions.map(describeDenied);
   const status = String(json.status ?? '');
   return {
     ok: status === 'SUCCESS' && denied.length === 0,

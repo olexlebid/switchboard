@@ -103,7 +103,8 @@ export async function startTask(input: StartInput, cfg: SwitchboardConfig, say: 
 
     const runId = `r-${id.slice(2)}-1`;
     const timeoutMs = (input.timeoutMin ?? cfg.run.timeoutMin) * 60_000;
-    const prompt = buildStartPrompt(task);
+    const existing = ['RULES.md', 'DESIGN.md', 'PROGRESS.md', `.sb/tasks/${id}.md`].filter((f) => existsSync(resolve(project, f)));
+    const prompt = buildStartPrompt(task, { agent, existing });
     const args = buildAgentArgs(agent, cfg.agents[agent], prompt, cfg.permissions[agent], timeoutMs);
     const logPath = logPathFor(runId);
     const run: Run = { id: runId, taskId: id, agent, startedAt: new Date().toISOString(), status: 'running', logPath };
