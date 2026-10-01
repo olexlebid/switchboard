@@ -11,6 +11,10 @@ export type State = {
   /** Recent snapshots for history charts, newest last. */
   history: UsageSnapshot[];
   exhausted: Partial<Record<AgentId, ExhaustedMark>>;
+  /** Hand-set marks for services without an API (dashboard manual cards). */
+  manual: Record<string, { state: 'available' | 'exhausted'; at: string }>;
+  /** Slow-changing facts cached between refreshes. */
+  meta: { agyModels?: { count: number; at: string } };
 };
 
 const HISTORY_LIMIT = 500;
@@ -24,7 +28,7 @@ function statePath(): string {
 }
 
 function emptyState(): State {
-  return { version: 1, snapshots: {}, history: [], exhausted: {} };
+  return { version: 1, snapshots: {}, history: [], exhausted: {}, manual: {}, meta: {} };
 }
 
 export function readState(): State {
@@ -68,4 +72,8 @@ export function setExhausted(agent: AgentId, mark: ExhaustedMark): void {
 
 export function clearExhausted(agent: AgentId): void {
   updateState((s) => { delete s.exhausted[agent]; });
+}
+
+export function setManual(id: string, state: 'available' | 'exhausted', now = new Date()): void {
+  updateState((s) => { s.manual[id] = { state, at: now.toISOString() }; });
 }

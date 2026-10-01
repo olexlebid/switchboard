@@ -27,3 +27,9 @@ routing:
   section:  [claude, agy]
   review:   [agy, claude]
   qa:       [agy, claude]
+
+dashboard:
+  refreshTtlSec: 60       # the dashboard re-reads limits at most this often while it is open
+  manualCards:            # optional hand-set cards (no API); not used by the router. Use [] to hide.
+    - { id: gemini-chat, title: "Gemini (чат)" }
+    - { id: stitch, title: "Stitch" }

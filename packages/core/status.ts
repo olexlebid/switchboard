@@ -26,17 +26,17 @@ export function computeStatus(
   reactive?: ExhaustedMark,
 ): StatusResult {
   const t = now.getTime();
-
-  if (reactive && Date.parse(reactive.until) > t) {
-    return { status: 'exhausted', reason: `ліміт вичерпано (${reactive.reason})` };
-  }
-  if (!snap) return { status: 'unknown', reason: 'даних немає' };
-
-  const ageMs = t - Date.parse(snap.capturedAt);
-  const fiveHourPct = effectivePct(snap.fiveHour, t);
-  const weeklyPct = effectivePct(snap.weekly, t);
+  const ageMs = snap ? t - Date.parse(snap.capturedAt) : undefined;
+  const fiveHourPct = effectivePct(snap?.fiveHour, t);
+  const weeklyPct = effectivePct(snap?.weekly, t);
   const base = { ageMs, fiveHourPct, weeklyPct };
   const pcts = [fiveHourPct, weeklyPct].filter((p): p is number => p !== undefined);
+
+  // A reactive mark wins, but the last known percentages are still reported for the UI.
+  if (reactive && Date.parse(reactive.until) > t) {
+    return { ...base, status: 'exhausted', reason: `ліміт вичерпано (${reactive.reason})` };
+  }
+  if (!snap || ageMs === undefined) return { status: 'unknown', reason: 'даних немає' };
 
   // Usage never drops before the reset, so an exhausted window stays exhausted even if data is old.
   if (pcts.some((p) => p >= th.exhausted)) return { ...base, status: 'exhausted', reason: `вікно ≥ ${th.exhausted}%` };

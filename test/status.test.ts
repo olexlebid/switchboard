@@ -41,6 +41,13 @@ describe('computeStatus', () => {
     s.fiveHour!.resetsAt = hours(-1);
     expect(st(s)).toBe('available');
   });
+  it('a reactive mark still reports the last known percentages', () => {
+    const mark = { until: hours(2), reason: 'x', since: hours(-1) };
+    const r = computeStatus(snap(40, 10), TH, 30, NOW, mark);
+    expect(r.status).toBe('exhausted');
+    expect(r.fiveHourPct).toBe(40);
+    expect(r.weeklyPct).toBe(10);
+  });
   it('a reactive mark wins while it is in the future, and expires afterwards', () => {
     const mark = { until: hours(2), reason: '5-год ліміт', since: hours(-1) };
     expect(st(snap(1, 1), mark)).toBe('exhausted');

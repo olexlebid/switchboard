@@ -1,0 +1,89 @@
+---
+// One agent card: identity, status badge, two window meters, per-group meters (agy) and a data footer.
+import { formatAge } from '@core/time';
+import type { AgentOverview } from '@core/overview';
+import type { GroupWindow, Thresholds } from '@core/types';
+import Meter from './Meter.astro';
+
+interface Props {
+  agent: AgentOverview;
+  thresholds: Thresholds;
+}
+const { agent, thresholds } = Astro.props;
+const { snapshot } = agent;
+
+// Group the flat per-group rows into { name, fiveHour, weekly } blocks, keeping first-seen order.
+const groups = new Map<string, { fiveHour?: GroupWindow; weekly?: GroupWindow }>();
+for (const g of snapshot?.perGroup ?? []) {
+  const entry = groups.get(g.group) ?? {};
+  entry[g.window] = g;
+  groups.set(g.group, entry);
+}
+const iconPath =
+  agent.agent === 'claude'
+    ? 'M12 2v20M2 12h20M5 5l14 14M19 5L5 19'
+    : 'M4 20L12 4l8 16M8 14h8';
+---
+
+<article class:list={['card', `card--${agent.status}`]} aria-labelledby={`${agent.agent}-title`} data-agent={agent.agent}>
+  <header class="card__head">
+    <span class="card__icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d={iconPath}></path>
+      </svg>
+    </span>
+    <div class="card__id">
+      <h2 class="card__title" id={`${agent.agent}-title`}>{agent.title}</h2>
+      {snapshot?.account && <p class="card__account">{snapshot.account}</p>}
+    </div>
+    <span class:list={['badge', `badge--${agent.status}`]}>
+      <span class="badge__dot" aria-hidden="true"></span>
+      <span class="visually-hidden">Статус: </span>{agent.statusLabel}
+    </span>
+  </header>
+
+  <p class="card__reason">{agent.reason}</p>
+
+  {
+    snapshot ? (
+      <div class:list={['card__meters', agent.stale && 'is-stale']}>
+        <Meter id={`${agent.agent}-5h`} label="5 год" pct={agent.fiveHourPct} resetsAt={snapshot.fiveHour?.resetsAt} thresholds={thresholds} />
+        <Meter id={`${agent.agent}-week`} label="Тиждень" pct={agent.weeklyPct} resetsAt={snapshot.weekly?.resetsAt} thresholds={thresholds} />
+
+        {groups.size > 0 && (
+          <section class="groups" aria-label="Групи моделей">
+            <h3 class="groups__title">Групи моделей</h3>
+            {[...groups.entries()].map(([name, g], i) => (
+              <div class="group">
+                <h4 class="group__name">{name}</h4>
+                <div class="group__meters">
+                  <Meter id={`${agent.agent}-g${i}-5h`} label="5 год" pct={g.fiveHour?.usedPct} resetsAt={g.fiveHour?.resetsAt} thresholds={thresholds} />
+                  <Meter id={`${agent.agent}-g${i}-week`} label="Тиждень" pct={g.weekly?.usedPct} resetsAt={g.weekly?.resetsAt} thresholds={thresholds} />
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
+      </div>
+    ) : (
+      <p class="card__empty">Немає збереженого знімка. Натисни «Оновити».</p>
+    )
+  }
+
+  {agent.error && <p class="card__error" role="status"><strong>Не вдалося оновити:</strong> {agent.error}</p>}
+
+  <footer class="card__foot">
+    {snapshot?.modelCount !== undefined && <span>Моделей: {snapshot.modelCount}</span>}
+    {snapshot && <span>Джерело: {snapshot.source}</span>}
+    {
+      snapshot && (
+        <span>
+          <time datetime={snapshot.capturedAt} data-age={snapshot.capturedAt}>
+            {formatAge(Date.now() - Date.parse(snapshot.capturedAt))}
+          </time>
+        </span>
+      )
+    }
+    {agent.stale && <span class="tag tag--stale">застаріло</span>}
+  </footer>
+</article>

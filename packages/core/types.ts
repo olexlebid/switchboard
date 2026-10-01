@@ -25,6 +25,8 @@ export type UsageSnapshot = {
   perGroup?: GroupWindow[];
   /** Masked account label, e.g. "ole…@gmail.com". */
   account?: string;
+  /** Number of models the agent offers (agy: from `agy models`, cached). */
+  modelCount?: number;
   source: 'statusline' | 'cli' | 'local-logs' | 'reactive' | 'manual';
   /** ISO time the numbers were read. */
   capturedAt: string;
@@ -52,9 +54,12 @@ export type Thresholds = {
   weeklyReserve: number;
 };
 
+export type ManualCardConfig = { id: string; title: string };
+
 export type SwitchboardConfig = {
   agents: Record<AgentId, AgentConfig>;
   limits: { staleAfterMin: number; fetchTimeoutSec: number };
+  dashboard: { refreshTtlSec: number; manualCards: ManualCardConfig[] };
   thresholds: Thresholds;
   routing: Record<string, AgentId[]>;
 };

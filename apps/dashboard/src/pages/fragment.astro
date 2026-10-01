@@ -1,0 +1,14 @@
+---
+// Dashboard body only (no layout). The page polls this and swaps #dashboard in place.
+import { getOverview } from '@core/overview';
+import Dashboard from '../components/Dashboard.astro';
+import { checkRequest, forbidden } from '../guard';
+
+const denied = checkRequest(Astro.request);
+if (denied) return forbidden(denied);
+
+const overview = await getOverview('if-stale');
+Astro.response.headers.set('cache-control', 'no-store');
+---
+
+<div id="dashboard"><Dashboard overview={overview} /></div>

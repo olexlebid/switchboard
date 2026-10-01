@@ -1,0 +1,53 @@
+---
+// The swappable dashboard body: header with counters, agent cards, manual cards.
+// Rendered by index.astro (first paint) and by /fragment (client polling).
+import { STATUS_LABEL } from '@core/status';
+import type { Overview } from '@core/overview';
+import type { AgentStatus } from '@core/types';
+import AgentCard from './AgentCard.astro';
+import ManualCard from './ManualCard.astro';
+
+interface Props {
+  overview: Overview;
+}
+const { overview } = Astro.props;
+const order: AgentStatus[] = ['available', 'low', 'reserve', 'exhausted', 'unknown'];
+const updated = new Date(overview.refreshedAt ?? overview.generatedAt);
+const clock = updated.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+---
+
+<header class="top">
+  <h1 class="top__title">Ліміти</h1>
+  <ul class="chips" aria-label="Зведення статусів">
+    {
+      order.map((s) => (
+        <li class:list={['chip', `chip--${s}`]}>
+          <span class="chip__dot" aria-hidden="true" />
+          <strong>{overview.summary[s]}</strong> {STATUS_LABEL[s]}
+        </li>
+      ))
+    }
+  </ul>
+  <div class="top__meta">
+    <p class="top__updated" aria-live="polite">
+      Оновлено <time datetime={updated.toISOString()}>{clock}</time>
+    </p>
+    <form method="post" action="/api/refresh" data-async data-refresh>
+      <button class="btn btn--primary" type="submit">Оновити</button>
+    </form>
+  </div>
+</header>
+
+<section class="grid" aria-label="Агенти">
+  {overview.agents.map((agent) => <AgentCard agent={agent} thresholds={overview.thresholds} />)}
+</section>
+
+{
+  overview.manual.length > 0 && (
+    <section aria-labelledby="manual-heading" class="manual">
+      <h2 class="manual__title" id="manual-heading">Ручні позначки</h2>
+      <p class="manual__hint">Для сервісів без API. У роутингу не беруть участі.</p>
+      <div class="grid">{overview.manual.map((card) => <ManualCard card={card} />)}</div>
+    </section>
+  )
+}

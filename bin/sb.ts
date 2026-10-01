@@ -1,15 +1,10 @@
 #!/usr/bin/env -S npx tsx
 // Switchboard CLI. Stage 1 implements `status` and `hook`; the rest arrive in later stages.
 import { parseArgs } from 'node:util';
-import { loadConfig } from '../packages/core/config';
-import { renderStatus, renderSummary, type StatusRow } from '../packages/core/format';
+import { renderStatus, renderSummary } from '../packages/core/format';
 import { installHook, uninstallHook } from '../packages/core/hook-install';
-import { collectUsage } from '../packages/core/limits';
-import { computeStatus } from '../packages/core/status';
-import { readState } from '../packages/core/store';
-import type { AgentId } from '../packages/core/types';
-
-const TITLES: Record<AgentId, string> = { claude: 'Claude Code', agy: 'Antigravity' };
+import { runDashboard } from '../packages/core/dashboard';
+import { getOverview } from '../packages/core/overview';
 
 const HELP = `Switchboard
 
@@ -18,36 +13,23 @@ const HELP = `Switchboard
   status [--cached] [--json]   ліміти обох агентів (за замовчуванням читає свіжі дані)
   hook install [--dry-run]     підключити statusLine-хук у ~/.claude/settings.json (з бекапом)
   hook uninstall               відкотити settings.json до стану до встановлення
-  run | queue | resume | init | dashboard   (будуть у наступних етапах)
+  dashboard [--prod] [--port N]  дешборд на http://127.0.0.1:4321 (за замовчуванням dev з hot reload; --prod = збірка і запуск)
+  run | queue | resume | init   (будуть у наступних етапах)
 `;
 
 async function status(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { cached: { type: 'boolean' }, json: { type: 'boolean' } } });
-  const cfg = loadConfig();
-  const now = new Date();
-
-  const results = values.cached
-    ? (['claude', 'agy'] as AgentId[]).map((agent) => ({ agent, snapshot: readState().snapshots[agent], error: undefined as string | undefined }))
-    : await collectUsage(cfg, now);
-
-  const state = readState();
-  const rows: StatusRow[] = results.map((r) => ({
-    agent: r.agent,
-    title: TITLES[r.agent],
-    snapshot: r.snapshot,
-    error: r.error,
-    result: computeStatus(r.snapshot, cfg.thresholds, cfg.limits.staleAfterMin, now, state.exhausted[r.agent]),
-  }));
+  const overview = await getOverview(values.cached ? 'cached' : 'force');
 
   if (values.json) {
-    console.log(JSON.stringify({ generatedAt: now.toISOString(), agents: rows }, null, 2));
+    console.log(JSON.stringify(overview, null, 2));
   } else {
     const color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
-    console.log(`\nЛіміти · ${renderSummary(rows)}\n`);
-    console.log(renderStatus(rows, now, color));
+    console.log(`\nЛіміти · ${renderSummary(overview)}\n`);
+    console.log(renderStatus(overview.agents, new Date(overview.generatedAt), color));
   }
   // Exit 1 only when no data could be obtained for any agent.
-  return rows.every((r) => !r.snapshot) ? 1 : 0;
+  return overview.agents.every((a) => !a.snapshot) ? 1 : 0;
 }
 
 async function main(): Promise<number> {
@@ -69,7 +51,11 @@ async function main(): Promise<number> {
     case '-h':
       console.log(HELP);
       return 0;
-    case 'run': case 'queue': case 'resume': case 'init': case 'dashboard':
+    case 'dashboard': {
+      const { values } = parseArgs({ args: rest, options: { prod: { type: 'boolean' }, port: { type: 'string' } } });
+      return runDashboard({ prod: values.prod, port: values.port ? Number(values.port) : undefined });
+    }
+    case 'run': case 'queue': case 'resume': case 'init':
       console.error(`"sb ${cmd}" ще не реалізовано (див. етапи в README).`);
       return 2;
     default:

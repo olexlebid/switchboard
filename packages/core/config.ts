@@ -1,13 +1,25 @@
 // Loads switchboard.config.yaml and validates the parts the code relies on.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import type { AgentConfig, AgentId, SwitchboardConfig } from './types';
 
 const AGENT_IDS: AgentId[] = ['claude', 'agy'];
 
+/**
+ * Config lookup order: SB_CONFIG, then walking up from the working directory (works for the
+ * bundled dashboard server, where import.meta.url no longer points into the repo), then the
+ * repo root relative to this source file.
+ */
 export function defaultConfigPath(): string {
-  return process.env.SB_CONFIG ?? fileURLToPath(new URL('../../switchboard.config.yaml', import.meta.url));
+  if (process.env.SB_CONFIG) return process.env.SB_CONFIG;
+  for (let dir = resolve(process.cwd()); ; dir = dirname(dir)) {
+    const candidate = join(dir, 'switchboard.config.yaml');
+    if (existsSync(candidate)) return candidate;
+    if (dirname(dir) === dir) break;
+  }
+  return fileURLToPath(new URL('../../switchboard.config.yaml', import.meta.url));
 }
 
 function fail(msg: string): never {
@@ -58,12 +70,20 @@ export function parseConfig(text: string): SwitchboardConfig {
   }
 
   const l = raw.limits ?? {};
+  const d = raw.dashboard ?? {};
+  const manualCards = Array.isArray(d.manualCards)
+    ? d.manualCards.map((c: any, i: number) => {
+        if (!c || typeof c.id !== 'string' || typeof c.title !== 'string') fail(`dashboard.manualCards[${i}] needs id and title`);
+        return { id: c.id, title: c.title };
+      })
+    : [{ id: 'gemini-chat', title: 'Gemini (чат)' }, { id: 'stitch', title: 'Stitch' }];
   return {
     agents,
     limits: {
       staleAfterMin: num(l.staleAfterMin, 'limits.staleAfterMin', 30),
       fetchTimeoutSec: num(l.fetchTimeoutSec, 'limits.fetchTimeoutSec', 30),
     },
+    dashboard: { refreshTtlSec: num(d.refreshTtlSec, 'dashboard.refreshTtlSec', 60), manualCards },
     thresholds,
     routing,
   };

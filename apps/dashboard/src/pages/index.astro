@@ -1,0 +1,127 @@
+---
+import { getOverview } from '@core/overview';
+import Dashboard from '../components/Dashboard.astro';
+import Base from '../layouts/Base.astro';
+import { checkRequest, forbidden } from '../guard';
+
+const denied = checkRequest(Astro.request);
+if (denied) return forbidden(denied);
+
+const overview = await getOverview('if-stale');
+Astro.response.headers.set('cache-control', 'no-store');
+---
+
+<Base title="Switchboard · Ліміти">
+  <div class="container">
+    <p id="conn" class="conn" role="status" hidden>Немає зв'язку із сервером Switchboard. Повторюю спробу…</p>
+    <main id="dashboard">
+      <Dashboard overview={overview} />
+    </main>
+  </div>
+</Base>
+
+<script>
+  // Keeps the page fresh without a framework:
+  //  - every 30 s fetches /fragment (server-rendered HTML) and swaps #dashboard if it changed;
+  //  - every 15 s re-computes the "↻ 3 г 36 хв" countdowns and "2 хв тому" ages locally;
+  //  - forms marked data-async (Оновити, manual cards) are sent with fetch instead of a page reload.
+  import { formatAge, formatDuration } from '@core/time';
+
+  const POLL_MS = 30_000;
+  const TICK_MS = 15_000;
+  const root = document.getElementById('dashboard') as HTMLElement;
+  const conn = document.getElementById('conn') as HTMLElement;
+  let busy = false;
+
+  function tick(): void {
+    const now = Date.now();
+    root.querySelectorAll<HTMLElement>('[data-countdown]').forEach((el) => {
+      const left = Date.parse(el.dataset.countdown ?? '') - now;
+      el.textContent = left > 0 ? formatDuration(left) : 'скинуто';
+    });
+    root.querySelectorAll<HTMLElement>('[data-age]').forEach((el) => {
+      el.textContent = formatAge(now - Date.parse(el.dataset.age ?? ''));
+    });
+  }
+
+  // A control is identified by its form action, the card id inside the form and the button value,
+  // so it can be found again after the markup is replaced.
+  type FocusKey = { action: string; id: string; value: string };
+
+  function focusKeyOf(el: Element | null): FocusKey | undefined {
+    const button = el instanceof HTMLButtonElement ? el : null;
+    const form = button?.closest('form');
+    if (!button || !form || !root.contains(button)) return undefined;
+    return {
+      action: form.getAttribute('action') ?? '',
+      id: form.querySelector<HTMLInputElement>('[name=id]')?.value ?? '',
+      value: button.value,
+    };
+  }
+
+  function restoreFocus(key: FocusKey | undefined): void {
+    if (!key) return;
+    const form = [...root.querySelectorAll<HTMLFormElement>('form')].find(
+      (f) => f.getAttribute('action') === key.action && (f.querySelector<HTMLInputElement>('[name=id]')?.value ?? '') === key.id,
+    );
+    const buttons = [...(form?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
+    (buttons.find((b) => b.value === key.value) ?? buttons[0])?.focus();
+  }
+
+  // Replaces the dashboard markup (only if it changed) and keeps keyboard focus on the same control.
+  function swap(html: string, focus?: FocusKey): void {
+    const next = new DOMParser().parseFromString(html, 'text/html').getElementById('dashboard');
+    if (!next || next.innerHTML === root.innerHTML) return;
+    const key = focus ?? focusKeyOf(document.activeElement);
+    root.innerHTML = next.innerHTML;
+    restoreFocus(key);
+    tick();
+  }
+
+  async function poll(focus?: FocusKey): Promise<void> {
+    if (busy) return;
+    busy = true;
+    try {
+      const res = await fetch('/fragment', { cache: 'no-store' });
+      if (!res.ok) throw new Error(String(res.status));
+      swap(await res.text(), focus);
+      conn.hidden = true;
+    } catch {
+      conn.hidden = false;
+    } finally {
+      busy = false;
+    }
+  }
+
+  document.addEventListener('submit', async (event) => {
+    const form = event.target as HTMLFormElement;
+    if (!form.hasAttribute('data-async')) return;
+    event.preventDefault();
+    const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+    const body = new FormData(form);
+    if (submitter?.name) body.set(submitter.name, submitter.value);
+    const focusKey = focusKeyOf(submitter);
+    const buttons = form.querySelectorAll('button');
+    buttons.forEach((b) => ((b as HTMLButtonElement).disabled = true));
+    submitter?.setAttribute('aria-busy', 'true');
+    try {
+      const res = await fetch(form.action, { method: 'POST', body, headers: { accept: 'application/json' } });
+      if (!res.ok) throw new Error(String(res.status));
+      conn.hidden = true;
+    } catch {
+      conn.hidden = false;
+    }
+    // Re-render from the server; the buttons are replaced by the fresh markup.
+    busy = false;
+    await poll(focusKey);
+    // If nothing changed the old form is still in the DOM: re-enable it and put focus back.
+    buttons.forEach((b) => ((b as HTMLButtonElement).disabled = false));
+    submitter?.removeAttribute('aria-busy');
+    restoreFocus(focusKey);
+  });
+
+  setInterval(() => { if (!document.hidden) void poll(); }, POLL_MS);
+  setInterval(tick, TICK_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void poll(); });
+  tick();
+</script>

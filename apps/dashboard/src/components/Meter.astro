@@ -1,0 +1,53 @@
+---
+// One usage window: label, percent, progress bar (role=progressbar) and a live reset countdown.
+import { formatDuration } from '@core/time';
+import type { Thresholds } from '@core/types';
+
+interface Props {
+  label: string;
+  /** Percent used, 0..100; undefined = no data. */
+  pct?: number;
+  resetsAt?: string;
+  thresholds: Thresholds;
+  /** Unique id prefix for aria-labelledby. */
+  id: string;
+}
+const { label, pct, resetsAt, thresholds, id } = Astro.props;
+
+const known = pct !== undefined;
+const rounded = known ? Math.round(pct * 10) / 10 : 0;
+const width = Math.min(100, Math.max(0, rounded));
+const level = !known ? 'none' : rounded >= thresholds.exhausted ? 'high' : rounded >= thresholds.low ? 'mid' : 'ok';
+
+const leftMs = resetsAt ? Date.parse(resetsAt) - Date.now() : undefined;
+const countdown = leftMs === undefined ? '' : leftMs > 0 ? formatDuration(leftMs) : 'скинуто';
+const valueText = known
+  ? `${rounded}% використано${countdown ? `, скидання через ${countdown}` : ''}`
+  : 'немає даних';
+---
+
+<div class="meter">
+  <div class="meter__row">
+    <span class="meter__label" id={`${id}-label`}>{label}</span>
+    <span class="meter__value">{known ? `${rounded}%` : '—'}</span>
+  </div>
+  <div
+    class:list={['meter__track', `meter__track--${level}`]}
+    role="progressbar"
+    aria-labelledby={`${id}-label`}
+    aria-valuemin="0"
+    aria-valuemax="100"
+    aria-valuenow={known ? rounded : undefined}
+    aria-valuetext={valueText}
+  >
+    <div class="meter__fill" style={`width: ${width}%`}></div>
+  </div>
+  {
+    resetsAt && (
+      <p class="meter__reset">
+        <span aria-hidden="true">↻</span> <span class="visually-hidden">скидання через </span>
+        <span data-countdown={resetsAt}>{countdown}</span>
+      </p>
+    )
+  }
+</div>

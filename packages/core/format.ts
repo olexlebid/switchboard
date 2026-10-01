@@ -1,17 +1,8 @@
 // Plain-text rendering of agent statuses for `sb status` (status is always text, never color-only).
-import type { StatusResult } from './status';
+import type { AgentOverview, Overview } from './overview';
 import { STATUS_LABEL } from './status';
 import { formatAge, formatDuration } from './time';
-import type { AgentId, UsageSnapshot, UsageWindow } from './types';
-
-export type StatusRow = {
-  agent: AgentId;
-  title: string;
-  result: StatusResult;
-  snapshot?: UsageSnapshot;
-  /** Why a fresh read failed, if it did. */
-  error?: string;
-};
+import type { UsageWindow } from './types';
 
 const COLORS = { available: 32, low: 33, reserve: 33, exhausted: 31, unknown: 90 } as const;
 
@@ -32,21 +23,20 @@ function reset(w: UsageWindow | undefined, now: number): string {
   return left > 0 ? `↻ ${formatDuration(left)}` : 'скинуто';
 }
 
-export function renderStatus(rows: StatusRow[], now: Date, color: boolean): string {
+export function renderStatus(rows: AgentOverview[], now: Date, color: boolean): string {
   const paint = (s: string, code: number) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
   const t = now.getTime();
   const out: string[] = [];
 
   for (const row of rows) {
-    const { result, snapshot } = row;
-    const label = STATUS_LABEL[result.status].toUpperCase();
+    const { snapshot } = row;
     const account = snapshot?.account ? `  (${snapshot.account})` : '';
-    out.push(`${paint(`● ${label}`, COLORS[result.status])}  ${row.title}${account}`);
-    out.push(`    ${result.reason}`);
+    out.push(`${paint(`● ${row.statusLabel.toUpperCase()}`, COLORS[row.status])}  ${row.title}${account}`);
+    out.push(`    ${row.reason}`);
 
     if (snapshot) {
-      out.push(`    5 год    ${bar(result.fiveHourPct)} ${pctText(result.fiveHourPct)}  ${reset(snapshot.fiveHour, t)}`);
-      out.push(`    тиждень  ${bar(result.weeklyPct)} ${pctText(result.weeklyPct)}  ${reset(snapshot.weekly, t)}`);
+      out.push(`    5 год    ${bar(row.fiveHourPct)} ${pctText(row.fiveHourPct)}  ${reset(snapshot.fiveHour, t)}`);
+      out.push(`    тиждень  ${bar(row.weeklyPct)} ${pctText(row.weeklyPct)}  ${reset(snapshot.weekly, t)}`);
       for (const g of snapshot.perGroup ?? []) {
         const w = g.window === 'fiveHour' ? '5 год  ' : 'тиждень';
         const rst = g.resetsAt ? reset({ usedPct: g.usedPct, resetsAt: g.resetsAt }, t) : '';
@@ -63,7 +53,7 @@ export function renderStatus(rows: StatusRow[], now: Date, color: boolean): stri
 }
 
 /** Header counters like "1 доступно · 0 мало · 0 резерв · 1 вичерпано · 0 невідомо". */
-export function renderSummary(rows: StatusRow[]): string {
+export function renderSummary(overview: Pick<Overview, 'summary'>): string {
   const order = ['available', 'low', 'reserve', 'exhausted', 'unknown'] as const;
-  return order.map((s) => `${rows.filter((r) => r.result.status === s).length} ${STATUS_LABEL[s]}`).join(' · ');
+  return order.map((s) => `${overview.summary[s]} ${STATUS_LABEL[s]}`).join(' · ');
 }

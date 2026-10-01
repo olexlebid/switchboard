@@ -39,7 +39,24 @@ export function pickAgentWindow(groups: GroupWindow[], window: GroupWindow['wind
   return { usedPct: best.usedPct, resetsAt: best.resetsAt! };
 }
 
-export async function fetchAgyUsage(cfg: AgentConfig, timeoutMs: number, now = new Date()): Promise<UsageSnapshot> {
+/** Counts model rows in `agy models` output ("<id><tab><Display name>" per line). */
+export function countAgyModels(text: string): number {
+  return stripAnsi(text).split(/\r?\n/).filter((l) => /^[a-z0-9][\w.-]*\s+\S/i.test(l) && !/^fetching\b/i.test(l)).length;
+}
+
+export async function fetchAgyModelCount(cfg: AgentConfig, timeoutMs: number): Promise<number | undefined> {
+  const r = await runCommand(cfg.cmd, ['models'], { timeoutMs, cwd: tmpdir() });
+  if (r.code !== 0) return undefined;
+  const n = countAgyModels(r.stdout);
+  return n > 0 ? n : undefined;
+}
+
+export async function fetchAgyUsage(
+  cfg: AgentConfig,
+  timeoutMs: number,
+  now = new Date(),
+  modelCount?: number,
+): Promise<UsageSnapshot> {
   const r = await runCommand(cfg.cmd, cfg.usageArgs, { timeoutMs, cwd: tmpdir() });
   if (r.spawnError) throw new Error(`cannot run "${cfg.cmd}": ${r.spawnError}`);
   if (r.timedOut) throw new Error(`"${cfg.cmd} ${cfg.usageArgs.join(' ')}" timed out`);
@@ -55,6 +72,7 @@ export async function fetchAgyUsage(cfg: AgentConfig, timeoutMs: number, now = n
     fiveHour: pickAgentWindow(groups, 'fiveHour'),
     weekly: pickAgentWindow(groups, 'weekly'),
     perGroup: groups,
+    modelCount,
     source: 'cli',
     capturedAt: now.toISOString(),
   };

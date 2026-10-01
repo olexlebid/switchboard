@@ -8,7 +8,19 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@core/*": [
+        "./packages/core/*"
+      ]
+    }
   },
-  "include": ["packages", "bin", "test", "apps"]
+  "include": [
+    "packages",
+    "bin",
+    "test",
+    "apps/dashboard/src/**/*.ts"
+  ]
 }
