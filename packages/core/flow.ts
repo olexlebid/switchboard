@@ -333,7 +333,7 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
       }
 
       task.status = touchedProtected.length > 0 ? 'blocked' : agentUnfinished ? 'waiting' : status === 'done' ? 'done' : status === 'blocked' ? 'blocked' : 'failed';
-      task.note = run.reason ?? run.summary?.slice(0, 200);
+      task.note = oneLine(run.reason ?? run.summary ?? '', 200) || undefined;
       saveRun(run);
       saveTask(task);
       break;
@@ -356,6 +356,12 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
       warnings.push(`не вдалося повернутися на ${returnTo}: ${(e as Error).message}`);
     }
   }
+}
+
+/** Collapses whitespace so notes stay on one line in lists. */
+function oneLine(text: string, max: number): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
 const other = (a: AgentId): AgentId => (a === 'claude' ? 'agy' : 'claude');

@@ -170,7 +170,7 @@ async function queue(argv: string[]): Promise<number> {
     console.log(`${t.id}  ${t.status.padEnd(8)} ${t.type.padEnd(8)} ${(t.agent ?? '-').padEnd(6)} ${t.branch}`);
     console.log(`    ${t.text.split('\n')[0]!.slice(0, 80)}`);
     if (t.status === 'waiting') console.log(`    ${dueClock(t)}`);
-    if (t.note) console.log(`    ${t.note}`);
+    if (t.note) console.log(`    ${t.note.replace(/\s+/g, ' ').slice(0, 160)}`);
     for (const h of t.handoffs ?? []) console.log(`    ↪ ${h.from} → ${h.to ?? '(нікому)'}: ${h.reason}`);
   }
   return 0;
