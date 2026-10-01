@@ -75,18 +75,19 @@ async function run(argv: string[]): Promise<number> {
   );
 
   const icon: Record<string, string> = { done: '✔ ГОТОВО', blocked: '■ ЗАБЛОКОВАНО (агенту не дозволено дію)', failed: '✖ ПОМИЛКА' };
-  const label = icon[r.run.status] ?? r.run.status;
+  const label = r.task.status === 'waiting' ? '◐ НЕ ЗАВЕРШЕНО (агент: in-progress)' : (icon[r.run.status] ?? r.run.status);
   const secs = Math.round((Date.parse(r.run.endedAt ?? r.run.startedAt) - Date.parse(r.run.startedAt)) / 1000);
   console.log(`\n${label}  ${r.task.id}  (${r.run.agent}, ${secs} с)`);
   if (r.run.reason) console.log(`  причина: ${r.run.reason}`);
   if (r.run.summary) console.log(`  відповідь агента: ${r.run.summary.slice(0, 400).replace(/\n/g, ' ')}`);
+  if (r.progress.status) console.log(`  PROGRESS.md: Status: ${r.progress.status}${r.progress.openQuestions.length ? `; відкриті питання: ${r.progress.openQuestions.join(' | ')}` : ''}`);
   console.log(`  гілка:   ${r.task.branch}   (проєкт повернуто на ${r.task.baseBranch})`);
   console.log(`  файли:   ${r.files.length ? r.files.join(', ') : '—'}`);
   console.log(`  лог:     ${r.run.logPath}`);
   for (const w of r.warnings) console.log(`  ! ${w}`);
   console.log(`\nПереглянь: git -C ${r.task.project} diff ${r.task.baseBranch}..${r.task.branch}`);
   console.log('Мерж у main і деплой роби сам, Switchboard цього не робить.');
-  return r.run.status === 'done' ? 0 : r.run.status === 'blocked' ? 4 : 1;
+  return r.task.status === 'done' ? 0 : r.task.status === 'blocked' || r.task.status === 'waiting' ? 4 : 1;
 }
 
 function queue(): number {

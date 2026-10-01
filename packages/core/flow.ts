@@ -3,6 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { checkoutBranch, changedFiles, commitAll, currentBranch, dirtyFiles, headSha, isGitRepo, pushBranch, switchBack } from './git';
 import { interpretOutput, type Outcome } from './interpret';
+import { readProgress, type ProgressInfo } from './progress';
 import { buildStartPrompt } from './prompt';
 import { buildAgentArgs, logPathFor, runAgentProcess } from './runner';
 import { saveRun, saveTask } from './store';
@@ -30,6 +31,8 @@ export type StartResult = {
   task: Task;
   run: Run;
   outcome: Outcome;
+  /** What the agent itself wrote in PROGRESS.md (status, open questions). */
+  progress: ProgressInfo;
   files: string[];
   warnings: string[];
 };
@@ -112,21 +115,27 @@ export async function startTask(input: StartInput, cfg: SwitchboardConfig, say: 
       outcome.error = `exit code ${proc.code}`;
     }
 
-    const status: Run['status'] = outcome.ok ? 'done' : outcome.denied.length > 0 ? 'blocked' : 'failed';
+    // The agent's own verdict in PROGRESS.md counts too: "blocked" or "in-progress" means not finished.
+    const progress: ProgressInfo = outcome.ok ? readProgress(project, id) : { openQuestions: [] };
+    const agentBlocked = outcome.ok && progress.status === 'blocked';
+    const agentUnfinished = outcome.ok && progress.status === 'in-progress';
+
+    const status: Run['status'] = outcome.ok && !agentBlocked ? 'done' : outcome.denied.length > 0 || agentBlocked ? 'blocked' : 'failed';
     run.status = status;
     run.endedAt = new Date().toISOString();
     run.exitCode = proc.code;
     run.summary = outcome.summary;
-    run.reason = outcome.denied.length ? `denied: ${outcome.denied.join(', ')}` : outcome.error;
+    run.reason = outcome.denied.length
+      ? `denied: ${outcome.denied.join(', ')}`
+      : agentBlocked
+        ? `агент позначив blocked у PROGRESS.md${progress.openQuestions[0] ? `: ${progress.openQuestions[0]}` : ''}`
+        : agentUnfinished
+          ? 'агент не завершив задачу (Status: in-progress у PROGRESS.md)'
+          : outcome.error;
 
-    // The agent must stay on the task branch; otherwise we would commit onto the wrong branch.
-    const nowBranch = await currentBranch(project);
-    if (nowBranch !== task.branch) {
-      throw new SbError(`Агент змінив гілку на "${nowBranch}" (очікувалась ${task.branch}); нічого не закомічено.`, 1);
-    }
-
-    // Keep whatever the agent produced: a final commit on success, a checkpoint otherwise.
-    const message = outcome.ok
+    // Keep whatever the agent produced: a final commit only for a finished task, a checkpoint otherwise.
+    const finished = outcome.ok && !agentBlocked && !agentUnfinished;
+    const message = finished
       ? `feat(sb): ${taskTitle(task.text)} [${id}]`
       : `wip(sb): checkpoint ${id} from ${agent}`;
     const sha = await commitAll(project, message);
@@ -142,11 +151,11 @@ export async function startTask(input: StartInput, cfg: SwitchboardConfig, say: 
       }
     }
 
-    task.status = status === 'done' ? 'done' : status === 'blocked' ? 'blocked' : 'failed';
+    task.status = agentUnfinished ? 'waiting' : status === 'done' ? 'done' : status === 'blocked' ? 'blocked' : 'failed';
     task.note = run.reason ?? run.summary?.slice(0, 200);
     saveRun(run);
     saveTask(task);
-    return { task, run, outcome, files, warnings };
+    return { task, run, outcome, progress, files, warnings };
   } catch (e) {
     // Never leave a task stuck in "running" when the orchestrator itself failed.
     task.status = 'failed';

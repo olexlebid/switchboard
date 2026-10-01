@@ -7,6 +7,7 @@ import { parseConfig } from '../packages/core/config';
 import { SbError, startTask } from '../packages/core/flow';
 import { initProject } from '../packages/core/init';
 import { interpretOutput } from '../packages/core/interpret';
+import { parseProgress } from '../packages/core/progress';
 import { readState } from '../packages/core/store';
 
 const FAKE = join(import.meta.dirname, 'fake-agent.mjs');
@@ -48,8 +49,10 @@ beforeEach(() => {
   project = makeRepo();
   delete process.env.FAKE_AGENT_MODE;
   delete process.env.FAKE_AGENT_STYLE;
+  delete process.env.FAKE_PROGRESS_STATUS;
 });
 afterEach(() => {
+  delete process.env.FAKE_PROGRESS_STATUS;
   delete process.env.SB_HOME;
   delete process.env.FAKE_AGENT_MODE;
   delete process.env.FAKE_AGENT_STYLE;
@@ -78,6 +81,22 @@ describe('startTask', () => {
     expect(log).toContain('<token>');
     expect(log).not.toContain('Create Footer.astro from DESIGN.md'); // the prompt is not dumped into the log
     expect(readState().tasks[r.task.id]?.status).toBe('done');
+  });
+
+  it("a run that ends with 'Status: blocked' in PROGRESS.md is blocked, with the open question as reason (seen in the first real run)", async () => {
+    process.env.FAKE_PROGRESS_STATUS = 'blocked';
+    const r = await startTask(input(), cfg());
+    expect(r.outcome.ok).toBe(true); // the process itself succeeded
+    expect(r.task.status).toBe('blocked');
+    expect(r.run.reason).toContain('No Astro project, build not verified');
+    expect(git('log', '-1', '--format=%s', r.task.branch)).toMatch(/^wip\(sb\)/);
+  });
+
+  it("'Status: in-progress' leaves the task waiting for a continuation", async () => {
+    process.env.FAKE_PROGRESS_STATUS = 'in-progress';
+    const r = await startTask(input(), cfg());
+    expect(r.task.status).toBe('waiting');
+    expect(git('log', '-1', '--format=%s', r.task.branch)).toMatch(/^wip\(sb\)/);
   });
 
   it('writes the task file with type, branch and definition of done', async () => {
@@ -201,5 +220,30 @@ describe('initProject', () => {
     expect(existsSync(join(project, '.sb/tasks/.gitkeep'))).toBe(true);
     const again = initProject(project);
     expect(again.created).toEqual([]);
+  });
+});
+
+describe('parseProgress', () => {
+  const md = `# Notes
+
+## Task t-1: Footer
+- Status: blocked
+- Last agent: claude
+- Done:
+  - [x] Footer
+- Open questions:
+  - Which year format?
+  - Is there a build script?
+
+## Task t-2: Other
+- Status: done
+`;
+  it('reads status and open questions of the right task only', () => {
+    expect(parseProgress(md, 't-1')).toEqual({ status: 'blocked', openQuestions: ['Which year format?', 'Is there a build script?'] });
+    expect(parseProgress(md, 't-2')).toEqual({ status: 'done', openQuestions: [] });
+  });
+  it('returns no status when the section is missing or the value is unknown', () => {
+    expect(parseProgress(md, 't-9').status).toBeUndefined();
+    expect(parseProgress('## Task t-3: x\n- Status: ??\n', 't-3').status).toBeUndefined();
   });
 });

@@ -34,8 +34,9 @@ function writeWork() {
   writeFileSync('src/components/Footer.astro', '---\n// fake footer\n---\n<footer class="footer section"></footer>\n');
 }
 
-function writeProgress(status = 'done') {
-  appendFileSync('PROGRESS.md', `\n## Task ${taskId}: Footer\n- Status: ${status}\n- Last agent: ${style === 'agy' ? 'agy' : 'claude'}\n- Done:\n  - [x] Footer (src/components/Footer.astro)\n`);
+function writeProgress(status = process.env.FAKE_PROGRESS_STATUS ?? 'done') {
+  const questions = status === 'blocked' ? '- Open questions:\n  - No Astro project, build not verified\n' : '';
+  appendFileSync('PROGRESS.md', `\n## Task ${taskId}: Footer\n- Status: ${status}\n- Last agent: ${style === 'agy' ? 'agy' : 'claude'}\n- Done:\n  - [x] Footer (src/components/Footer.astro)\n${questions}`);
 }
 
 switch (mode) {
