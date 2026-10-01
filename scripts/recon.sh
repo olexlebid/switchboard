@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# Switchboard stage-0 recon.
+#
+# Collects facts about the local `claude` and `agy` CLIs into one masked text
+# report. Everything runs inside throw-away temp directories. It never touches
+# ~/.claude, never uses --dangerously-skip-permissions / --yolo style flags and
+# sends only a few tiny prompts (a few requests in total).
+#
+# Usage:
+#   scripts/recon.sh            # main recon, writes sb-recon-<time>.txt
+#   scripts/recon.sh collect    # after the manual statusLine probe (see output)
+#
+# Compatible with bash 3.2 (macOS) and GNU bash.
+
+set -u
+
+START_DIR="$(pwd)"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+PROBE_DIR="${TMPDIR:-/tmp}/sb-recon-probe"
+TIMEOUT_SECS="${SB_RECON_TIMEOUT:-120}"
+# Keep the original stdin (a TTY when run from a terminal) for the TTY test.
+exec 3<&0
+
+# ---------------------------------------------------------------- helpers
+
+# Mask emails, tokens and the home directory in whatever flows through stdin.
+mask() {
+  sed -E \
+    -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g' \
+    -e 's/sk-[A-Za-z0-9_-]{8,}/<token>/g' \
+    -e 's/ya29\.[A-Za-z0-9._-]+/<token>/g' \
+    -e 's/AIza[0-9A-Za-z_-]{20,}/<token>/g' \
+    -e 's/gh[pousr]_[A-Za-z0-9]{20,}/<token>/g' \
+    -e 's/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_.-]+/<jwt>/g' \
+    -e 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1<token>/g' \
+    -e 's/([Tt]oken|[Ss]ecret|[Pp]assword|[Aa]pi[_-]?[Kk]ey)(["'"'"' :=]+)[^ "'"'"',]{6,}/\1\2<redacted>/g' \
+    -e "s|${HOME}|~|g"
+}
+
+# run_to <secs> <outfile> <cmd...>: run with a timeout, output to file, sets RC.
+# RC 124 means the command was killed by the timeout.
+run_to() {
+  local secs=$1 out=$2
+  shift 2
+  local marker="${out}.timeout"
+  rm -f "$marker"
+  if [ "${USE_TTY_STDIN:-0}" = 1 ]; then
+    "$@" >"$out" 2>&1 <&3 &
+  else
+    "$@" >"$out" 2>&1 </dev/null &
+  fi
+  local pid=$!
+  ( sleep "$secs"; touch "$marker"; kill -TERM "$pid" 2>/dev/null; sleep 2; kill -KILL "$pid" 2>/dev/null ) &
+  local wd=$!
+  wait "$pid" 2>/dev/null
+  RC=$?
+  kill "$wd" 2>/dev/null
+  wait "$wd" 2>/dev/null
+  if [ -f "$marker" ]; then
+    RC=124
+    rm -f "$marker"
+  fi
+}
+
+# Run a command under a pseudo-terminal. `script` differs between macOS and Linux.
+with_pty() {
+  if [ "$(uname)" = "Darwin" ]; then
+    script -q /dev/null "$@"
+  else
+    script -qec "$(printf '%q ' "$@")" /dev/null
+  fi
+}
+
+REPORT="$START_DIR/sb-recon-$STAMP.txt"
+say() { printf '%s\n' "$*" >>"$REPORT"; }
+head_() { printf '\n==== %s ====\n' "$*" >>"$REPORT"; }
+# Append a file (or its first N lines) to the report, indented.
+dump() { # dump <file> [max_lines]
+  local f=$1 n=${2:-60}
+  if [ -s "$f" ]; then head -n "$n" "$f" | sed 's/^/    /' >>"$REPORT"; else say "    (empty)"; fi
+}
+
+json_keys() { # print top-level shape of a JSON file
+  node -e '
+    const fs = require("fs");
+    try {
+      const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const o = Array.isArray(j)
+        ? { array_len: j.length, first_keys: Object.keys(j[0] || {}) }
+        : { keys: Object.keys(j), is_error: j.is_error, subtype: j.subtype,
+            result_preview: String(j.result || "").slice(0, 200) };
+      console.log(JSON.stringify(o, null, 2));
+    } catch (e) { console.log("not valid JSON: " + e.message); }
+  ' "$1" 2>&1
+}
+
+# ---------------------------------------------------------------- collect mode
+
+if [ "${1:-}" = "collect" ]; then
+  OUT="$START_DIR/sb-recon-statusline-$STAMP.txt"
+  REPORT="$OUT"
+  head_ "statusLine probe result"
+  DUMP="$PROBE_DIR/dump.json"
+  if [ ! -f "$DUMP" ]; then
+    say "NO DUMP FOUND at $DUMP: the statusLine hook did not fire (or you did not send a message)."
+  else
+    node -e '
+      const fs = require("fs");
+      const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      // Print only the shape (types), never values, except rate_limits.
+      const shape = (v, d = 0) =>
+        v && typeof v === "object" && !Array.isArray(v) && d < 3
+          ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shape(x, d + 1)]))
+          : Array.isArray(v) ? "array" : typeof v;
+      console.log("top-level shape:", JSON.stringify(shape(j), null, 2));
+      console.log("rate_limits present:", "rate_limits" in j);
+      if (j.rate_limits) console.log("rate_limits:", JSON.stringify(j.rate_limits, null, 2));
+    ' "$DUMP" 2>&1 >>"$REPORT"
+  fi
+  mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"
+  echo "Done. Review and send: $REPORT"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- main recon
+
+say "Switchboard recon $STAMP"
+say "Review this file before sending it. Emails/tokens/home path are masked, but check anyway."
+
+head_ "0. Environment"
+say "uname: $(uname -a | mask)"
+say "node:  $(node -v 2>&1)"
+say "pnpm:  $(pnpm -v 2>&1)"
+say "git:   $(git --version 2>&1)"
+HAVE_CLAUDE=0; HAVE_AGY=0
+command -v claude >/dev/null 2>&1 && HAVE_CLAUDE=1
+command -v agy >/dev/null 2>&1 && HAVE_AGY=1
+say "claude on PATH: $HAVE_CLAUDE ($(command -v claude 2>/dev/null | mask))"
+say "agy on PATH:    $HAVE_AGY ($(command -v agy 2>/dev/null | mask))"
+[ "$HAVE_CLAUDE" = 1 ] && say "claude --version: $(claude --version 2>&1 | head -1)"
+[ "$HAVE_AGY" = 1 ] && say "agy --version:    $(agy --version 2>&1 | head -1)"
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/sb-recon.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$WORK"
+
+# ---- help output + interesting flags
+for AG in claude agy; do
+  eval "have=\$HAVE_$(echo "$AG" | tr a-z A-Z)"
+  head_ "1. $AG --help (flag hints)"
+  if [ "$have" != 1 ]; then say "SKIPPED: $AG not installed"; continue; fi
+  run_to 30 "$WORK/$AG.help" "$AG" --help
+  say "exit code: $RC"
+  say "lines mentioning output/permission/approve/sandbox/model/usage/quota/print/allow/deny:"
+  grep -iE 'output|permission|approve|yolo|sandbox|model|usage|quota|print|allow|deny|settings|json|prompt' "$WORK/$AG.help" | head -n 50 | sed 's/^/    /' >>"$REPORT"
+done
+if [ "$HAVE_AGY" = 1 ]; then
+  head_ "1b. agy models / usage subcommands"
+  run_to 30 "$WORK/agy.models" agy models
+  say "agy models exit code: $RC"
+  dump "$WORK/agy.models" 30
+  for sub in usage quota; do
+    run_to 30 "$WORK/agy.$sub" agy "$sub" --help
+    say "agy $sub --help exit code: $RC"
+    dump "$WORK/agy.$sub" 8
+  done
+fi
+
+# ---- claude headless
+head_ "2. claude -p headless (temp dir, default permissions)"
+if [ "$HAVE_CLAUDE" != 1 ]; then
+  say "SKIPPED: claude not installed"
+else
+  CD="$WORK/claude-run"; mkdir -p "$CD"; cd "$CD" || exit 1
+  PROMPT='1) Create a file named hello.txt containing the word hi. 2) Run the shell command: echo SB_SHELL_OK > shell.txt . 3) Reply with the single word done.'
+  run_to "$TIMEOUT_SECS" "$WORK/claude.out" claude -p "$PROMPT" --output-format json
+  say "exit code: $RC (124 = timeout)"
+  say "hello.txt created: $([ -f hello.txt ] && echo yes || echo no)"
+  say "shell.txt created (shell allowed without prompt): $([ -f shell.txt ] && echo yes || echo no)"
+  say "JSON output shape:"
+  json_keys "$WORK/claude.out" | sed 's/^/    /' >>"$REPORT"
+  say "raw output (first 15 lines):"
+  dump "$WORK/claude.out" 15
+  cd "$START_DIR" || exit 1
+fi
+
+# ---- agy headless, no TTY and with TTY
+head_ "3. agy -p headless (temp dirs, default permissions)"
+if [ "$HAVE_AGY" != 1 ]; then
+  say "SKIPPED: agy not installed"
+else
+  AGY_PROMPT='1) Create a file named hello.txt containing the word hi. 2) Run the shell command: echo SB_SHELL_OK > shell.txt . 3) In your final reply include every token of the form SB_xxx_RULE that project rules files tell you to include, or the word NONE.'
+  for MODE in notty tty; do
+    D="$WORK/agy-$MODE"; mkdir -p "$D"; cd "$D" || exit 1
+    # Rules-file probe: which of these files does agy pick up automatically?
+    echo 'Project rule: always include the token SB_GEMINI_RULE in your final reply.' >GEMINI.md
+    echo 'Project rule: always include the token SB_AGENTS_RULE in your final reply.' >AGENTS.md
+    echo 'Project rule: always include the token SB_CLAUDE_RULE in your final reply.' >CLAUDE.md
+    OUT="$WORK/agy-$MODE.out"
+    if [ "$MODE" = tty ]; then
+      if [ -t 3 ]; then
+        USE_TTY_STDIN=1
+        run_to "$TIMEOUT_SECS" "$OUT" with_pty agy -p "$AGY_PROMPT" --output-format json
+        USE_TTY_STDIN=0
+      else
+        say "[tty] SKIPPED: no terminal on stdin"; cd "$START_DIR" || exit 1; continue
+      fi
+    else
+      run_to "$TIMEOUT_SECS" "$OUT" agy -p "$AGY_PROMPT" --output-format json
+    fi
+    say "[$MODE] exit code: $RC (124 = timeout/hang)"
+    if [ "$RC" -ne 0 ] && grep -qiE 'unknown|unrecognized|invalid.*(flag|option)' "$OUT"; then
+      say "[$MODE] --output-format json rejected, retrying with plain -p"
+      if [ "$MODE" = tty ]; then USE_TTY_STDIN=1; run_to "$TIMEOUT_SECS" "$OUT" with_pty agy -p "$AGY_PROMPT"; USE_TTY_STDIN=0
+      else run_to "$TIMEOUT_SECS" "$OUT" agy -p "$AGY_PROMPT"; fi
+      say "[$MODE] retry exit code: $RC"
+    fi
+    say "[$MODE] stdout/stderr bytes: $(wc -c <"$OUT" | tr -d ' ')"
+    say "[$MODE] hello.txt created: $([ -f hello.txt ] && echo yes || echo no)"
+    say "[$MODE] shell.txt created (shell allowed without prompt): $([ -f shell.txt ] && echo yes || echo no)"
+    for T in GEMINI AGENTS CLAUDE; do
+      say "[$MODE] rules marker SB_${T}_RULE seen in reply: $(grep -q "SB_${T}_RULE" "$OUT" && echo yes || echo no)"
+    done
+    say "[$MODE] raw output (first 20 lines):"
+    dump "$OUT" 20
+    cd "$START_DIR" || exit 1
+  done
+fi
+
+# ---- statusLine facts about the real settings (read-only, only statusLine key)
+head_ "4. ~/.claude/settings.json statusLine (read-only)"
+if [ -f "$HOME/.claude/settings.json" ]; then
+  node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    console.log("has statusLine:", "statusLine" in s);
+    if (s.statusLine) console.log(JSON.stringify(s.statusLine));
+  ' "$HOME/.claude/settings.json" 2>&1 | sed 's/^/    /' >>"$REPORT"
+else
+  say "    no ~/.claude/settings.json"
+fi
+
+# ---- examples of limit messages
+head_ "5. Limit-message examples found locally (max 8 lines, 160 chars each)"
+PAT='(usage limit|limit reached|hit your .{0,20}limit|limit will reset|resets [0-9]|resets at|rate_limit_error|RESOURCE_EXHAUSTED)'
+if [ -d "$HOME/.claude/projects" ]; then
+  say "claude sessions:"
+  grep -rhoiE ".{0,70}${PAT}.{0,70}" --include='*.jsonl' "$HOME/.claude/projects" 2>/dev/null | head -n 8 | cut -c1-160 | sed 's/^/    /' >>"$REPORT"
+fi
+say "agy/gemini/antigravity config dirs found (names only):"
+for d in "$HOME/.gemini" "$HOME/.antigravity" "$HOME/.antigravity_cli" "$HOME/.config/antigravity" "$HOME/.config/agy" \
+         "$HOME/Library/Application Support/Antigravity" "$HOME/Library/Application Support/agy"; do
+  [ -d "$d" ] && say "    $(printf '%s' "$d" | mask)"
+done
+for d in "$HOME/.gemini" "$HOME/.antigravity" "$HOME/.config/antigravity"; do
+  [ -d "$d" ] && grep -rhoiE ".{0,70}${PAT}.{0,70}" --include='*.log' --include='*.jsonl' "$d" 2>/dev/null | head -n 8 | cut -c1-160 | sed 's/^/    /' >>"$REPORT"
+done
+
+# ---- statusLine probe setup (manual step, project-local settings only)
+rm -rf "$PROBE_DIR"; mkdir -p "$PROBE_DIR/.claude"
+node -e '
+  const p = process.argv[1];
+  const cmd = "cat > " + JSON.stringify(p + "/dump.json") + "; echo sb-probe";
+  require("fs").writeFileSync(p + "/.claude/settings.local.json",
+    JSON.stringify({ statusLine: { type: "command", command: cmd } }, null, 2));
+' "$PROBE_DIR"
+head_ "6. statusLine probe (MANUAL STEP)"
+say "Probe dir prepared: $PROBE_DIR (project-local settings only, ~/.claude untouched)"
+
+# Mask the whole report in place.
+mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"
+
+cat <<EOF
+
+Recon report: $REPORT   (review it before sending)
+
+Manual step for the statusLine probe (needs your real Claude login):
+  cd "$PROBE_DIR" && claude
+  -> accept the trust prompt, send one short message (e.g. "hi"), wait for the
+     answer, then exit with /exit.
+  Then run:  scripts/recon.sh collect
+  and send the second file (sb-recon-statusline-*.txt) too.
+EOF
