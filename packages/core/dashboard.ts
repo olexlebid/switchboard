@@ -29,7 +29,7 @@ export function runDashboard(opts: { prod?: boolean; port?: number } = {}): Prom
   const port = opts.port ?? 4321;
   const bin = astroBin();
   // The bundled server does not know the repo layout: tell it where the config is.
-  const env = { ...process.env, SB_CONFIG: defaultConfigPath(), HOST, PORT: String(port) };
+  const env = { ...process.env, SB_CONFIG: defaultConfigPath(), SB_ROOT: fileURLToPath(new URL('../../', import.meta.url)), HOST, PORT: String(port) };
 
   let cmd: string[];
   if (opts.prod) {

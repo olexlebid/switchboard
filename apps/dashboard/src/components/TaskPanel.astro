@@ -1,0 +1,125 @@
+---
+// Live task panel (swapped on every poll): running task with log tail, queue, handover history, recent tasks.
+import { formatDuration } from '@core/time';
+import type { TaskView, TasksOverview } from '@core/task-overview';
+
+interface Props {
+  tasks: TasksOverview;
+}
+const { tasks } = Astro.props;
+
+const clock = (iso: string) => new Date(iso).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' });
+const leftText = (iso: string) => {
+  const left = Date.parse(iso) - Date.now();
+  return left > 0 ? formatDuration(left) : 'вже можна продовжити';
+};
+const elapsed = (t: TaskView) => (t.startedAt ? formatDuration(Date.now() - Date.parse(t.startedAt)) : '');
+---
+
+<div class="live" data-has-running={tasks.hasRunning ? '' : undefined}>
+  <section class="panel" aria-labelledby="running-title">
+    <h3 class="panel__title" id="running-title">Виконується</h3>
+    {tasks.running.length === 0 && <p class="panel__hint">Зараз нічого не виконується.</p>}
+    {
+      tasks.running.map((t) => (
+        <article class="task task--running" aria-labelledby={`task-${t.id}`}>
+          <header class="task__head">
+            <h4 class="task__title" id={`task-${t.id}`}>{t.title}</h4>
+            <span class="badge badge--low"><span class="badge__dot" aria-hidden="true"></span>{t.statusLabel}</span>
+          </header>
+          <dl class="task__meta">
+            <div><dt>Агент</dt><dd>{t.agentTitle ?? 'обирається…'}</dd></div>
+            <div><dt>Тип</dt><dd>{t.type}</dd></div>
+            <div><dt>Проєкт</dt><dd title={t.project}>{t.projectName}</dd></div>
+            <div><dt>Гілка</dt><dd><code>{t.branch}</code></dd></div>
+            {t.startedAt && <div><dt>Тривалість</dt><dd data-since={t.startedAt}>{elapsed(t)}</dd></div>}
+          </dl>
+          <pre class="log" tabindex="0" aria-label="Хвіст логу (останні 20 рядків)">{t.logTail.length ? t.logTail.join('\n') : 'Агент ще нічого не вивів (Claude віддає відповідь одним блоком наприкінці).'}</pre>
+          {t.canStop && (
+            <form class="task__actions" method="post" action="/api/task-action" data-async>
+              <input type="hidden" name="id" value={t.id} />
+              <input type="hidden" name="op" value="stop" />
+              <button class="btn" type="submit">Зупинити</button>
+            </form>
+          )}
+        </article>
+      ))
+    }
+  </section>
+
+  <section class="panel" aria-labelledby="queue-title">
+    <h3 class="panel__title" id="queue-title">Черга</h3>
+    {tasks.waiting.length === 0 && <p class="panel__hint">Нічого не чекає на скидання ліміту.</p>}
+    <ul class="list">
+      {
+        tasks.waiting.map((t) => (
+          <li class="list__item">
+            <div class="list__main">
+              <strong>{t.title}</strong>
+              <span class="list__sub">{t.note}</span>
+              {t.waitUntil && (
+                <span class="list__sub">
+                  Очікуваний старт: <time datetime={t.waitUntil}>{clock(t.waitUntil)}</time> (через <span data-countdown={t.waitUntil}>{leftText(t.waitUntil)}</span>)
+                </span>
+              )}
+            </div>
+            {t.canResume && (
+              <form method="post" action="/api/task-action" data-async>
+                <input type="hidden" name="id" value={t.id} />
+                <input type="hidden" name="op" value="resume" />
+                <button class="btn" type="submit">Продовжити</button>
+              </form>
+            )}
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <section class="panel" aria-labelledby="handoffs-title">
+    <h3 class="panel__title" id="handoffs-title">Історія передач</h3>
+    {tasks.handoffs.length === 0 && <p class="panel__hint">Передач між агентами ще не було.</p>}
+    <ul class="list">
+      {
+        tasks.handoffs.map((h) => (
+          <li class="list__item">
+            <div class="list__main">
+              <span>{h.text}</span>
+              <span class="list__sub">{h.taskTitle}</span>
+            </div>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <section class="panel" aria-labelledby="recent-title">
+    <h3 class="panel__title" id="recent-title">Останні задачі</h3>
+    {tasks.recent.length === 0 && <p class="panel__hint">Завершених задач ще немає.</p>}
+    <ul class="list">
+      {
+        tasks.recent.map((t) => (
+          <li class="list__item">
+            <div class="list__main">
+              <span>
+                <span class:list={['badge', 'badge--sm', t.status === 'done' ? 'badge--available' : t.status === 'failed' ? 'badge--exhausted' : 'badge--reserve']}>
+                  <span class="badge__dot" aria-hidden="true"></span>{t.statusLabel}
+                </span>
+                <strong>{t.title}</strong>
+              </span>
+              <span class="list__sub">{t.agentTitle ?? '—'} · {t.projectName} · <code>{t.branch}</code></span>
+              {t.note && <span class="list__sub">{t.note}</span>}
+            </div>
+            {t.canResume && (
+              <form method="post" action="/api/task-action" data-async>
+                <input type="hidden" name="id" value={t.id} />
+                <input type="hidden" name="op" value="resume" />
+                <button class="btn" type="submit">Продовжити</button>
+              </form>
+            )}
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+</div>

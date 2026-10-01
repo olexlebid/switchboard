@@ -1,6 +1,9 @@
 ---
 import { getOverview } from '@core/overview';
+import { getTasksOverview } from '@core/task-overview';
 import Dashboard from '../components/Dashboard.astro';
+import TaskForm from '../components/TaskForm.astro';
+import TaskPanel from '../components/TaskPanel.astro';
 import Base from '../layouts/Base.astro';
 import { checkRequest, forbidden } from '../guard';
 
@@ -8,50 +11,70 @@ const denied = checkRequest(Astro.request);
 if (denied) return forbidden(denied);
 
 const overview = await getOverview('if-stale');
+const tasks = getTasksOverview();
 Astro.response.headers.set('cache-control', 'no-store');
 ---
 
-<Base title="Switchboard · Ліміти">
+<Base title="Switchboard · Ліміти і задачі">
   <div class="container">
     <p id="conn" class="conn" role="status" hidden>Немає зв'язку із сервером Switchboard. Повторюю спробу…</p>
+    <p id="action-status" class="notice" role="status" hidden></p>
     <main id="dashboard">
       <Dashboard overview={overview} />
     </main>
+
+    <section class="tasks" aria-labelledby="tasks-title">
+      <h2 class="tasks__title" id="tasks-title">Задачі</h2>
+      <div class="tasks__grid">
+        <TaskForm types={tasks.types} projects={tasks.projects} />
+        <div id="tasks-live"><TaskPanel tasks={tasks} /></div>
+      </div>
+    </section>
   </div>
 </Base>
 
 <script>
   // Keeps the page fresh without a framework:
-  //  - every 30 s fetches /fragment (server-rendered HTML) and swaps #dashboard if it changed;
-  //  - every 15 s re-computes the "↻ 3 г 36 хв" countdowns and "2 хв тому" ages locally;
-  //  - forms marked data-async (Оновити, manual cards) are sent with fetch instead of a page reload.
+  //  - fetches /fragment (server-rendered HTML) and swaps #dashboard and #tasks-live when they changed:
+  //    every 30 s, every 5 s while a task is running;
+  //  - every 15 s re-computes countdowns ("↻ 3 г 36 хв"), ages ("2 хв тому") and task durations locally;
+  //  - forms marked data-async (Оновити, ручні картки, нова задача, зупинити/продовжити) are sent with
+  //    fetch; the server's message is shown in #action-status.
   import { formatAge, formatDuration } from '@core/time';
 
   const POLL_MS = 30_000;
+  const POLL_RUNNING_MS = 5_000;
   const TICK_MS = 15_000;
-  const root = document.getElementById('dashboard') as HTMLElement;
+  const REGIONS = ['dashboard', 'tasks-live'];
   const conn = document.getElementById('conn') as HTMLElement;
+  const status = document.getElementById('action-status') as HTMLElement;
   let busy = false;
+  let statusTimer: number | undefined;
+
+  const region = (id: string) => document.getElementById(id) as HTMLElement;
 
   function tick(): void {
     const now = Date.now();
-    root.querySelectorAll<HTMLElement>('[data-countdown]').forEach((el) => {
+    document.querySelectorAll<HTMLElement>('[data-countdown]').forEach((el) => {
       const left = Date.parse(el.dataset.countdown ?? '') - now;
-      el.textContent = left > 0 ? formatDuration(left) : 'скинуто';
+      el.textContent = left > 0 ? formatDuration(left) : 'вже можна продовжити';
     });
-    root.querySelectorAll<HTMLElement>('[data-age]').forEach((el) => {
+    document.querySelectorAll<HTMLElement>('[data-age]').forEach((el) => {
       el.textContent = formatAge(now - Date.parse(el.dataset.age ?? ''));
+    });
+    document.querySelectorAll<HTMLElement>('[data-since]').forEach((el) => {
+      el.textContent = formatDuration(now - Date.parse(el.dataset.since ?? ''));
     });
   }
 
-  // A control is identified by its form action, the card id inside the form and the button value,
+  // A control is identified by its form action, the card/task id inside the form and the button value,
   // so it can be found again after the markup is replaced.
   type FocusKey = { action: string; id: string; value: string };
 
   function focusKeyOf(el: Element | null): FocusKey | undefined {
     const button = el instanceof HTMLButtonElement ? el : null;
     const form = button?.closest('form');
-    if (!button || !form || !root.contains(button)) return undefined;
+    if (!button || !form || !REGIONS.some((r) => region(r).contains(button))) return undefined;
     return {
       action: form.getAttribute('action') ?? '',
       id: form.querySelector<HTMLInputElement>('[name=id]')?.value ?? '',
@@ -61,21 +84,35 @@ Astro.response.headers.set('cache-control', 'no-store');
 
   function restoreFocus(key: FocusKey | undefined): void {
     if (!key) return;
-    const form = [...root.querySelectorAll<HTMLFormElement>('form')].find(
-      (f) => f.getAttribute('action') === key.action && (f.querySelector<HTMLInputElement>('[name=id]')?.value ?? '') === key.id,
-    );
-    const buttons = [...(form?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
-    (buttons.find((b) => b.value === key.value) ?? buttons[0])?.focus();
+    for (const r of REGIONS) {
+      const form = [...region(r).querySelectorAll<HTMLFormElement>('form')].find(
+        (f) => f.getAttribute('action') === key.action && (f.querySelector<HTMLInputElement>('[name=id]')?.value ?? '') === key.id,
+      );
+      const buttons = [...(form?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
+      const target = buttons.find((b) => b.value === key.value) ?? buttons[0];
+      if (target) {
+        target.focus();
+        return;
+      }
+    }
   }
 
-  // Replaces the dashboard markup (only if it changed) and keeps keyboard focus on the same control.
+  // Replaces a region's markup only if it changed; scroll positions of log boxes are kept.
   function swap(html: string, focus?: FocusKey): void {
-    const next = new DOMParser().parseFromString(html, 'text/html').getElementById('dashboard');
-    if (!next || next.innerHTML === root.innerHTML) return;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
     const key = focus ?? focusKeyOf(document.activeElement);
-    root.innerHTML = next.innerHTML;
-    restoreFocus(key);
-    tick();
+    let changed = false;
+    for (const id of REGIONS) {
+      const next = doc.getElementById(id);
+      const current = region(id);
+      if (!next || next.innerHTML === current.innerHTML) continue;
+      current.innerHTML = next.innerHTML;
+      changed = true;
+    }
+    if (changed) {
+      restoreFocus(key);
+      tick();
+    }
   }
 
   async function poll(focus?: FocusKey): Promise<void> {
@@ -93,6 +130,14 @@ Astro.response.headers.set('cache-control', 'no-store');
     }
   }
 
+  function showStatus(message: string, isError: boolean): void {
+    status.textContent = message;
+    status.classList.toggle('notice--error', isError);
+    status.hidden = false;
+    window.clearTimeout(statusTimer);
+    statusTimer = window.setTimeout(() => { status.hidden = true; }, isError ? 12_000 : 6_000);
+  }
+
   document.addEventListener('submit', async (event) => {
     const form = event.target as HTMLFormElement;
     if (!form.hasAttribute('data-async')) return;
@@ -106,21 +151,35 @@ Astro.response.headers.set('cache-control', 'no-store');
     submitter?.setAttribute('aria-busy', 'true');
     try {
       const res = await fetch(form.action, { method: 'POST', body, headers: { accept: 'application/json' } });
-      if (!res.ok) throw new Error(String(res.status));
+      const data = (await res.json().catch(() => undefined)) as { ok?: boolean; message?: string; error?: string } | undefined;
       conn.hidden = true;
+      if (!res.ok) {
+        // The server answered: show its reason (not the "no connection" banner).
+        showStatus(data?.error ?? `Помилка ${res.status}`, true);
+      } else {
+        if (data?.message) showStatus(data.message, false);
+        if (form.hasAttribute('data-task-form')) form.reset();
+      }
     } catch {
       conn.hidden = false;
     }
     // Re-render from the server; the buttons are replaced by the fresh markup.
     busy = false;
     await poll(focusKey);
-    // If nothing changed the old form is still in the DOM: re-enable it and put focus back.
     buttons.forEach((b) => ((b as HTMLButtonElement).disabled = false));
     submitter?.removeAttribute('aria-busy');
     restoreFocus(focusKey);
   });
 
-  setInterval(() => { if (!document.hidden) void poll(); }, POLL_MS);
+  // Poll faster while a task is running, slower otherwise.
+  function schedule(): void {
+    const running = document.querySelector('[data-has-running]') !== null;
+    window.setTimeout(async () => {
+      if (!document.hidden) await poll();
+      schedule();
+    }, running ? POLL_RUNNING_MS : POLL_MS);
+  }
+  schedule();
   setInterval(tick, TICK_MS);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void poll(); });
   tick();

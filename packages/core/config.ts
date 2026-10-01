@@ -102,7 +102,7 @@ export function parseConfig(text: string): SwitchboardConfig {
       staleAfterMin: num(l.staleAfterMin, 'limits.staleAfterMin', 30),
       fetchTimeoutSec: num(l.fetchTimeoutSec, 'limits.fetchTimeoutSec', 30),
     },
-    dashboard: { refreshTtlSec: num(d.refreshTtlSec, 'dashboard.refreshTtlSec', 60), manualCards },
+    dashboard: { refreshTtlSec: num(d.refreshTtlSec, 'dashboard.refreshTtlSec', 60), manualCards, projects: strArray(d.projects, 'dashboard.projects', []) },
     thresholds,
     routing,
     run: { timeoutMin: num(raw.run?.timeoutMin, 'run.timeoutMin', 20) },

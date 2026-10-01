@@ -17,7 +17,7 @@ import { protectedTouched } from './protected';
 import { buildContinuePrompt, buildStartPrompt } from './prompt';
 import { routeTask } from './router';
 import { buildAgentArgs, logPathFor, runAgentProcess, type ProcessResult } from './runner';
-import { readState, saveRun, saveTask, setExhausted } from './store';
+import { addProject, readState, saveRun, saveTask, setExhausted } from './store';
 import { newTaskId, taskTitle, writeTaskFile } from './tasks';
 import type { AgentId, Handoff, Run, SwitchboardConfig, Task, UsageSnapshot } from './types';
 
@@ -135,6 +135,7 @@ export async function startTask(
     updatedAt: new Date().toISOString(),
   };
   saveTask(task);
+  addProject(project); // the dashboard form offers every project that was used at least once
   return drive(task, makeCtx(cfg, say, deps), { pinned: input.agent, timeoutMin: input.timeoutMin, noHandoff: input.noHandoff, resuming: false });
 }
 
@@ -188,6 +189,7 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
       git(...identity, 'commit', '-m', `wip(sb): checkpoint ${task.id} interrupted`);
     }
     task.status = 'failed';
+    task.pid = undefined;
     task.note = `перервано користувачем; робота збережена в ${task.branch} (проєкт лишився на цій гілці)`;
     saveTask(task);
   }, 2);
@@ -241,6 +243,7 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
 
       // ---- 3. run it
       task.status = 'running';
+      task.pid = process.pid;
       task.agent = agent;
       task.waitUntil = undefined;
       const { run, proc, outcome } = await runAttempt(task, agent, continuing, opts.timeoutMin, ctx, warnings);
@@ -348,6 +351,8 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
     saveTask(task);
     throw e;
   } finally {
+    task.pid = undefined;
+    saveTask(task);
     unregisterInterrupt();
     // Leave the project on the branch it was on before, with the task branch intact.
     try {

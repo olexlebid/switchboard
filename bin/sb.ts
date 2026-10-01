@@ -9,7 +9,7 @@ import { resumeTask, SbError, startTask, type StartResult } from '../packages/co
 import { initProject } from '../packages/core/init';
 import { notify } from '../packages/core/notify';
 import { getOverview } from '../packages/core/overview';
-import { clearExhausted, readState } from '../packages/core/store';
+import { addProject, clearExhausted, readState, removeProject } from '../packages/core/store';
 import { formatDuration } from '../packages/core/time';
 import type { AgentId, Run, Task } from '../packages/core/types';
 
@@ -29,6 +29,7 @@ const HELP = `Switchboard
   queue [--run-due]            список задач; --run-due продовжує ті, що чекали скидання ліміту й уже можуть іти
   resume <id> [--agent ...]    продовжити задачу, що чекає, заблокована або впала
   unblock claude|agy           зняти позначку «ліміт вичерпано» (якщо вона хибна)
+  project add|remove|list      проєкти, у яких дешборд може запускати задачі (проєкти з sb run додаються самі)
   notify-test                  перевірити системне сповіщення (macOS)
 `;
 
@@ -205,6 +206,36 @@ async function main(): Promise<number> {
       return queue(rest);
     case 'resume':
       return resume(rest);
+    case 'project': {
+      const [sub, path] = rest;
+      const { realpathSync, statSync } = await import('node:fs');
+      const { allowedProjects } = await import('../packages/core/task-overview');
+      if (sub === 'list') {
+        const list = allowedProjects(loadConfig());
+        console.log(list.length ? list.map((p) => `${p.name.padEnd(24)} ${p.path}`).join('\n') : 'Дозволених проєктів ще немає.');
+        return 0;
+      }
+      if ((sub === 'add' || sub === 'remove') && path) {
+        const abs = path.replace(/^~(?=$|\/)/, process.env.HOME ?? '~');
+        let real: string;
+        try {
+          real = realpathSync(abs);
+          if (!statSync(real).isDirectory()) throw new Error('not a directory');
+        } catch {
+          console.error(`Папки не існує: ${abs}`);
+          return 2;
+        }
+        if (sub === 'add') {
+          addProject(real);
+          console.log(`Проєкт дозволено для запуску з дешборду: ${real}`);
+        } else {
+          console.log(removeProject(real) ? `Прибрано: ${real}` : `Не було у списку (проєкти з минулих задач і з конфігу прибираються окремо): ${real}`);
+        }
+        return 0;
+      }
+      console.error('Використання: sb project add <папка> | sb project remove <папка> | sb project list');
+      return 2;
+    }
     case 'notify-test': {
       const ok = await notify('Switchboard', 'Тест сповіщення: якщо ти це бачиш, паузи задач нагадуватимуть про себе.');
       console.log(ok ? 'Сповіщення надіслано.' : 'Не вдалося надіслати сповіщення (працює лише на macOS через osascript).');

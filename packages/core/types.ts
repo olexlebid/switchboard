@@ -86,6 +86,8 @@ export type Task = {
   handoffs?: Handoff[];
   /** review tasks: id of the task whose code is reviewed (the reviewer must be another agent). */
   reviews?: string;
+  /** pid of the `sb` process that is working on the task (set while it runs). */
+  pid?: number;
 };
 
 export type Handoff = { from: AgentId; to?: AgentId; at: string; reason: string };
@@ -110,7 +112,7 @@ export type PermissionRules = { allow: string[]; deny: string[] };
 export type SwitchboardConfig = {
   agents: Record<AgentId, AgentConfig>;
   limits: { staleAfterMin: number; fetchTimeoutSec: number };
-  dashboard: { refreshTtlSec: number; manualCards: ManualCardConfig[] };
+  dashboard: { refreshTtlSec: number; manualCards: ManualCardConfig[]; projects: string[] };
   thresholds: Thresholds;
   routing: Record<string, AgentId[]>;
   run: { timeoutMin: number };

@@ -13,6 +13,8 @@ export type State = {
   exhausted: Partial<Record<AgentId, ExhaustedMark>>;
   /** Hand-set marks for services without an API (dashboard manual cards). */
   manual: Record<string, { state: 'available' | 'exhausted'; at: string }>;
+  /** Project folders the dashboard may start tasks in (added by `sb project add` or by running a task). */
+  projects: string[];
   tasks: Record<string, Task>;
   runs: Record<string, Run>;
   /** Slow-changing facts cached between refreshes. */
@@ -30,7 +32,7 @@ function statePath(): string {
 }
 
 function emptyState(): State {
-  return { version: 1, snapshots: {}, history: [], exhausted: {}, manual: {}, tasks: {}, runs: {}, meta: {} };
+  return { version: 1, snapshots: {}, history: [], exhausted: {}, manual: {}, projects: [], tasks: {}, runs: {}, meta: {} };
 }
 
 export function readState(): State {
@@ -90,4 +92,18 @@ export function saveTask(task: Task): void {
 
 export function saveRun(run: Run): void {
   updateState((s) => { s.runs[run.id] = run; });
+}
+
+export function addProject(path: string): void {
+  updateState((s) => { if (!s.projects.includes(path)) s.projects.push(path); });
+}
+
+export function removeProject(path: string): boolean {
+  let removed = false;
+  updateState((s) => {
+    const before = s.projects.length;
+    s.projects = s.projects.filter((p) => p !== path);
+    removed = s.projects.length < before;
+  });
+  return removed;
 }

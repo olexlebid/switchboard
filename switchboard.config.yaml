@@ -31,6 +31,8 @@ routing:
 
 dashboard:
   refreshTtlSec: 60       # the dashboard re-reads limits at most this often while it is open
+  projects: []            # extra project folders the dashboard form may start tasks in (~ allowed);
+                          # projects added with `sb project add` or used by earlier tasks are allowed too
   manualCards:            # optional hand-set cards (no API); not used by the router. Use [] to hide.
     - { id: gemini-chat, title: "Gemini (чат)" }
     - { id: stitch, title: "Stitch" }
