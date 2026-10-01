@@ -11,6 +11,7 @@
 #   scripts/recon.sh collect    # after the manual statusLine probe (see output)
 #   scripts/recon.sh round2     # follow-up probes (agy rules file, permissions, config dirs)
 #   scripts/recon.sh round3     # agy headless permission mechanisms (10 small requests)
+#   scripts/recon.sh round4     # agy user-level permissions.allow + workspace trust (temporarily edits, then restores, agy settings)
 #
 # Compatible with bash 3.2 (macOS) and GNU bash.
 
@@ -250,6 +251,104 @@ if [ "${1:-}" = "round3" ]; then
 
   say ""
   say "Notes: hello.txt = file writes work, shell.txt = shell commands work. Nothing here uses --dangerously-skip-permissions."
+  echo "Done. Review and send: $REPORT"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- round4 mode
+
+# Tests whether a user-level permissions.allow rule and/or a trusted workspace lets `agy -p`
+# write files. It TEMPORARILY edits ~/.gemini/antigravity-cli/settings.json: the original is
+# backed up first and restored (and verified byte-for-byte) when the script ends, even on Ctrl+C.
+if [ "${1:-}" = "round4" ]; then
+  REPORT="$START_DIR/sb-recon-round4-$STAMP.txt"
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/sb-recon4.XXXXXX")"
+  SETTINGS="$HOME/.gemini/antigravity-cli/settings.json"
+  BACKUP="$SETTINGS.sb-backup-$STAMP"
+  RESTORED=0
+  restore_settings() {
+    [ "$RESTORED" = 1 ] && return
+    RESTORED=1
+    if [ -f "$BACKUP" ]; then
+      cp -p "$BACKUP" "$SETTINGS"
+      if cmp -s "$BACKUP" "$SETTINGS"; then
+        say ""; say "Settings restored byte-for-byte from the backup (backup kept at $BACKUP)."
+        echo "agy settings restored."
+      else
+        echo "WARNING: could not verify the restore. Copy $BACKUP back to $SETTINGS manually."
+        say "WARNING: restore not verified. Backup at $BACKUP"
+      fi
+    fi
+  }
+  finalize() { restore_settings; rm -rf "$WORK"; [ -f "$REPORT" ] && mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"; }
+  trap finalize EXIT
+  trap 'exit 130' INT TERM
+
+  say "Switchboard recon round 4 (agy user-level permissions and workspace trust) $STAMP"
+  command -v agy >/dev/null 2>&1 || { say "agy not installed"; echo "Done. Review and send: $REPORT"; exit 0; }
+  [ -f "$SETTINGS" ] || { say "No $SETTINGS: nothing to test"; echo "Done. Review and send: $REPORT"; exit 0; }
+  cp -p "$SETTINGS" "$BACKUP"
+  say "Backup of settings: $BACKUP"
+
+  head_ "Q0. Shape of trustedWorkspaces (types only)"
+  node -e '
+    const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const t = j.trustedWorkspaces;
+    console.log("    trustedWorkspaces: " + (Array.isArray(t) ? "array(" + t.length + ") element types: " + JSON.stringify(t.map((x) => typeof x)) : typeof t));
+  ' "$SETTINGS" >>"$REPORT" 2>&1
+
+  # apply_settings <allow-json-array|""> <trust-dir|"">: start from the original, merge, write.
+  apply_settings() {
+    ALLOW="$1" TRUST="$2" ORIG="$BACKUP" OUT="$SETTINGS" node -e '
+      const fs = require("fs");
+      const j = JSON.parse(fs.readFileSync(process.env.ORIG, "utf8"));
+      if (process.env.ALLOW) {
+        j.permissions = j.permissions || {};
+        j.permissions.allow = [...(j.permissions.allow || []), ...JSON.parse(process.env.ALLOW)];
+      }
+      if (process.env.TRUST) {
+        const t = Array.isArray(j.trustedWorkspaces) ? j.trustedWorkspaces : [];
+        if (t.every((x) => typeof x === "string")) j.trustedWorkspaces = [...t, process.env.TRUST];
+        else { console.error("trustedWorkspaces has non-string elements: not touched"); }
+      }
+      fs.writeFileSync(process.env.OUT, JSON.stringify(j, null, 2));
+    ' 2>>"$REPORT"
+  }
+
+  WRITE_PROMPT='Create a file named hello.txt containing the word hi. Reply with one short sentence.'
+  SHELL_PROMPT='Run the shell command: echo SB_SHELL_OK > shell.txt . Reply with one short sentence.'
+  # probe <label> <prompt> <allow|""> <trust yes|no> [agy flags...]
+  probe() {
+    local label=$1 prompt=$2 allow=$3 trust=$4; shift 4
+    local d="$WORK/$label"; mkdir -p "$d"; cd "$d" || return
+    d="$(pwd -P)"
+    if [ "$trust" = yes ]; then apply_settings "$allow" "$d"; else apply_settings "$allow" ""; fi
+    run_to 150 "$WORK/$label.out" agy -p "$prompt" --output-format json --print-timeout 120s "$@"
+    local denied
+    denied="$(grep -o '"denied_actions":\[[^]]*\]' "$WORK/$label.out" | head -1 | cut -c1-160)"
+    say "[$label] allow=${allow:-none} trusted=$trust ${*:+flags=$* }-> exit $RC | hello.txt: $([ -f hello.txt ] && echo yes || echo no) | shell.txt: $([ -f shell.txt ] && echo yes || echo no) | ${denied:-no denied_actions}"
+    cd "$START_DIR" || return
+  }
+
+  head_ "Q1. Which action name does a shell command use? (untrusted, no rules)"
+  probe shell_baseline "$SHELL_PROMPT" "" no
+
+  head_ "Q2. Workspace trust and rules, write only"
+  probe trust_only "$WRITE_PROMPT" "" yes
+  probe trust_accept_edits "$WRITE_PROMPT" "" yes --mode accept-edits
+  probe allow_untrusted "$WRITE_PROMPT" '["write_file(*)"]' no
+  probe allow_trusted "$WRITE_PROMPT" '["write_file(*)"]' yes
+  probe allow_bare_trusted "$WRITE_PROMPT" '["write_file"]' yes
+
+  head_ "Q3. Shell command with a rule (action name taken from Q1)"
+  SHELL_ACTION="$(grep -o '"action":"[^"]*"' "$WORK/shell_baseline.out" | head -1 | cut -d'"' -f4)"
+  say "shell action name from Q1: ${SHELL_ACTION:-unknown}"
+  if [ -n "$SHELL_ACTION" ]; then
+    probe shell_allow_trusted "$SHELL_PROMPT" "[\"${SHELL_ACTION}(*)\"]" yes
+  fi
+
+  say ""
+  say "Notes: nothing here used --dangerously-skip-permissions. The original settings file is restored at the end."
   echo "Done. Review and send: $REPORT"
   exit 0
 fi
