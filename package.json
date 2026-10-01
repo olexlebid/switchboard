@@ -16,6 +16,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "mammoth": "^1.13.0",
+    "read-excel-file": "^9.3.10",
+    "sharp": "^0.35.5",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
