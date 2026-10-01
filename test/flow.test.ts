@@ -119,6 +119,16 @@ describe('startTask', () => {
     expect(git('branch', '--list', 'sb/*')).toBe('');
   });
 
+  it('ignores leftover untracked files under .sb/ but still refuses user changes next to them', async () => {
+    mkdirSync(join(project, '.sb', 'tasks'), { recursive: true });
+    writeFileSync(join(project, '.sb', 'tasks', 't-old.md'), '# stale task');
+    writeFileSync(join(project, 'notes.txt'), 'uncommitted');
+    await expect(start(input(), cfg())).rejects.toMatchObject({ exitCode: 3 });
+    rmSync(join(project, 'notes.txt'));
+    const r = await start(input(), cfg());
+    expect(r.task.status).toBe('done');
+  });
+
   it('marks a run with denied tools as blocked and keeps partial work in a wip checkpoint', async () => {
     process.env.FAKE_AGENT_MODE = 'partial';
     const r = await start(input(), cfg());

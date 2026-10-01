@@ -9,7 +9,7 @@ import { attachmentsPrompt, loadBatch } from './attachments';
 import { runAgentOnce } from './agent-run';
 import { onExit } from './cleanup';
 import { SbError } from './errors';
-import { changedFiles, checkoutBranch, commitAll, currentBranch, dirtyFiles, headSha, isGitRepo, pushBranch, switchBack } from './git';
+import { blockingDirtyFiles, changedFiles, checkoutBranch, commitAll, currentBranch, headSha, isGitRepo, pushBranch, summarizeDirty, switchBack } from './git';
 import type { Outcome } from './interpret';
 import { detectLimit } from './limit-detect';
 import { collectUsage } from './limits';
@@ -184,8 +184,11 @@ export async function runChatTurn(
   const clash = busyWith(project, chatId);
   if (clash) throw new SbError(`У проєкті вже працює ${clash}. Дочекайся завершення.`, 3);
   const returnTo = await currentBranch(project);
-  if (returnTo !== first.branch && (await dirtyFiles(project)).length > 0) {
-    throw new SbError('Робоче дерево проєкту не чисте: закоміть або відклади зміни, тоді повтори.', 3);
+  if (returnTo !== first.branch) {
+    const dirty = await blockingDirtyFiles(project);
+    if (dirty.length > 0) {
+      throw new SbError(`Робоче дерево проєкту не чисте (${dirty.length} змін: ${summarizeDirty(dirty)}). Закоміть або відклади зміни, тоді повтори.`, 3);
+    }
   }
 
   const setMessage = (status: ChatMessage['status']) =>

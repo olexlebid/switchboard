@@ -7,7 +7,7 @@ import { loadBatch } from './attachments';
 import { runAgentOnce } from './agent-run';
 import { SbError } from './errors';
 import { onExit } from './cleanup';
-import { changedFiles, checkoutBranch, commitAll, currentBranch, dirtyFiles, headSha, isGitRepo, pushBranch, switchBack } from './git';
+import { blockingDirtyFiles, changedFiles, checkoutBranch, commitAll, currentBranch, headSha, isGitRepo, pushBranch, switchBack } from './git';
 import { outputTail, writeCheckpoint } from './handoff';
 import type { Outcome } from './interpret';
 import { detectLimit, type LimitSignal } from './limit-detect';
@@ -114,7 +114,7 @@ export async function startTask(
   if (!input.text.trim()) throw new SbError('Порожній текст задачі.', 2);
   if (input.reviews && !readState().tasks[input.reviews]) throw new SbError(`--reviews: задачі ${input.reviews} не існує.`, 2);
 
-  const dirty = await dirtyFiles(project);
+  const dirty = await blockingDirtyFiles(project);
   if (dirty.length > 0) {
     throw new SbError(
       `Робоче дерево в ${project} не чисте (${dirty.length} змін). Закоміть або відклади зміни й повтори.\n  ${dirty.slice(0, 8).join('\n  ')}`,
@@ -161,7 +161,7 @@ export async function resumeTask(
   if (task.status === 'running') throw new SbError(`Задача ${id} зараз виконується.`, 2);
   if (!existsSync(task.project) || !(await isGitRepo(task.project))) throw new SbError(`Проєкт задачі недоступний: ${task.project}`, 2);
 
-  const dirty = await dirtyFiles(task.project);
+  const dirty = await blockingDirtyFiles(task.project);
   if (dirty.length > 0) {
     throw new SbError(`Робоче дерево в ${task.project} не чисте (${dirty.length} змін). Закоміть або відклади зміни й повтори.\n  ${dirty.slice(0, 8).join('\n  ')}`, 3);
   }
@@ -255,7 +255,7 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
 
       // ---- 2. be on the task branch with the task file in place
       if ((await currentBranch(project)) !== task.branch) {
-        if ((await dirtyFiles(project)).length > 0) throw new SbError('Робоче дерево не чисте: не можу перейти на гілку задачі.', 3);
+        if ((await blockingDirtyFiles(project)).length > 0) throw new SbError('Робоче дерево не чисте: не можу перейти на гілку задачі.', 3);
         await checkoutBranch(project, task.branch);
       }
       writeTaskFile(task);

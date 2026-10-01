@@ -39,6 +39,22 @@ export async function dirtyFiles(cwd: string): Promise<string[]> {
   return out ? out.split('\n') : [];
 }
 
+/**
+ * Dirty entries that should stop us from starting work on the user's tree. Untracked files under `.sb/`
+ * (leftover task files and the like) are Switchboard's own service files, not the user's changes.
+ */
+export async function blockingDirtyFiles(cwd: string): Promise<string[]> {
+  const r = await git(cwd, ['status', '--porcelain']);
+  if (r.code !== 0) throw new GitError(`git status failed: ${(r.stderr || r.stdout).trim()}`);
+  return r.stdout.split('\n').filter((l) => l && !/^\?\? "?\.sb\//.test(l));
+}
+
+/** One-line list of dirty entries for error messages: `M src/a.ts, ?? notes.txt (+3 more)`. */
+export function summarizeDirty(lines: string[], max = 5): string {
+  const shown = lines.slice(0, max).map((l) => l.trim().replace(/\s+/, ' ')).join(', ');
+  return lines.length > max ? `${shown} (+${lines.length - max} ще)` : shown;
+}
+
 export async function branchExists(cwd: string, branch: string): Promise<boolean> {
   const r = await git(cwd, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
   return r.code === 0;

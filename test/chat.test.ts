@@ -186,6 +186,23 @@ describe('chat turns', () => {
     expect(readState().chats[chat.id]!.status).toBe('idle');
   });
 
+  it('names the dirty files in the refusal', async () => {
+    const cfg = cfgFor();
+    const chat = await createChat({ project });
+    writeFileSync(join(project, 'mine.txt'), 'my work');
+    addUserMessage(chat.id, { text: 'привіт' });
+    await expect(runChatTurn(chat.id, cfg, () => {}, deps(cfg))).rejects.toThrow(/1 змін: \?\? mine\.txt/);
+  });
+
+  it('ignores leftover untracked Switchboard files under .sb/', async () => {
+    const cfg = cfgFor();
+    const chat = await createChat({ project });
+    mkdirSync(join(project, '.sb', 'tasks'), { recursive: true });
+    writeFileSync(join(project, '.sb', 'tasks', 't-old.md'), '# stale task');
+    await turn(cfg, chat.id, 'привіт');
+    expect(readState().chats[chat.id]!.status).toBe('idle');
+  });
+
   it('passes attachments to the agent', async () => {
     const cfg = cfgFor();
     const chat = await createChat({ project });
