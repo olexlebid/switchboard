@@ -1,13 +1,13 @@
 # Stage 0 recon: expected vs actual
 
 Round 1 run on macOS (arm64), Node 22.20, `claude` 2.1.286, `agy` 1.2.14.
-Round 2 (`scripts/recon.sh round2`) is pending; rows marked **R2** depend on it.
+Manual `/usage` and `/quota` checks done on the same machine. Round 2 (`scripts/recon.sh round2`) output is still to be reviewed; rows marked **R2** depend on it.
 
 | # | Topic | Expected (from spec) | Actual | Verdict |
 |---|-------|----------------------|--------|---------|
 | 1 | `claude` headless | `claude -p` | Works. `--output-format json` returns one JSON object with `result`, `is_error`, `total_cost_usd`, `usage`, `modelUsage`, `permission_denials`, `terminal_reason`, `api_error_status` | OK |
 | 2 | `claude -p` permissions | Needs allow-rules, no full bypass | Write and shell are **denied by default**; the run still ends with `is_error:false`, `subtype:success`. Denials are listed in `permission_denials`. `--allowedTools` / `--disallowedTools` exist. | Differs: success flag does not mean the task was done. Allow-list test is **R2** |
-| 3 | statusLine JSON has `rate_limits` | Present for Pro/Max | **Absent** in 2.1.286 (one probe session, one message). Present instead: `cost`, `context_window`, `model`, `version`, `fast_mode`, ... | **Differs: primary Claude source unavailable** |
+| 3 | statusLine JSON has `rate_limits` | Present for Pro/Max | **Absent** in 2.1.286 (one probe session, one message). Present instead: `cost`, `context_window`, `model`, `version`, `fast_mode`, ... | **Differs.** Replaced by `claude -p "/usage"` (row 15) |
 | 4 | Existing `statusLine` in `~/.claude/settings.json` | Unknown | None configured | OK, hook needs no wrapping on this machine (keep the wrap logic anyway) |
 | 5 | `agy` headless | `agy -p` | Works. Flags: `-p/--print`, `--output-format text|json|stream-json`, `--print-timeout`, `--model`, `--sandbox`, `--json-schema`, `--dangerously-skip-permissions` | OK |
 | 6 | `agy -p` without TTY | May hang / empty stdout | **No hang**, ~4 s, JSON printed. With a pty it was slower (29 s) and polluted with escape codes | Differs (better): `node-pty` not needed |
@@ -17,12 +17,16 @@ Round 2 (`scripts/recon.sh round2`) is pending; rows marked **R2** depend on it.
 | 10 | Rules file read by `agy` | GEMINI.md / AGENTS.md / other | **Inconclusive**: the reply was empty because of the write denial. Config dirs found: `~/.gemini`, `~/.antigravity`, `~/Library/Application Support/Antigravity` | Retest in **R2** |
 | 11 | Limit message samples, claude | "usage limit", "resets at" | None found (two false hits from Claude Code's own source text) | Still unknown |
 | 12 | Limit message samples, agy | Unknown | None found, `~/.gemini` and `~/.antigravity` logs empty | Still unknown |
-| 13 | `agy -p` usage numbers | Percentages | JSON has token counts only (`usage.input_tokens`, ...), no quota percentages | Differs |
+| 13 | `agy -p` usage numbers | Percentages | `agy -p` JSON has token counts only, but `agy -p "/quota"` prints quota percentages (row 16) | Differs, solved by row 16 |
 | 14 | Tooling | pnpm | `pnpm` not installed (Node 22.20 is) | Install before stage 1 (`corepack enable` or `npm i -g pnpm`) |
+| 15 | Claude limits via `claude -p "/usage"` | Not in spec (slash commands assumed unavailable in `-p`) | **Works**, prints text, exit 0: `Current session: 2% used · resets Oct 1 at 12:30pm (Europe/Berlin)` and `Current week (all models): 3% used · resets Oct 1 at 9am (Europe/Berlin)`. Integer percent of **used**. Reset time is local wall-clock **without year**, with an IANA zone name. Same numbers as the TUI `/usage` tab | New primary Claude source (`source: "cli"`). To verify in stage 1: does it consume quota / appear in `total_cost_usd` (try `--output-format json`), and which text variants exist (no date when same day, 0% / 100% / limit reached) |
+| 16 | agy limits via `agy -p "/quota"` (also `/usage`) | Not in spec | **Works**, prints text, exit 0. Four lines: `<group>  <Weekly|Five Hour> Limit Remaining  <N>%  <ISO UTC reset time>`. Groups: `Gemini Models` (Flash + Pro) and `Claude and GPT models` (Opus, Sonnet, GPT-OSS). Percent is **remaining** and integer-rounded here (TUI showed 99.94 / 99.64), reset is absolute UTC | New primary agy source (`source: "cli"`). Quota is per **group**, not per model: `perModel` becomes `perGroup` |
+| 17 | Quota is per model group in agy | Per-model bars | Models inside a group share one weekly and one 5-hour limit; quota is consumed proportionally to token cost (text in the `/quota` TUI) | Dashboard shows 2 groups x 2 bars. Router must know which group a chosen `--model` belongs to |
 
 ## Consequences for the design
 
-1. **Claude limits.** Without `rate_limits` the statusLine hook is only a bonus source: keep it (cheap, picks the field up if a version returns it) but `claude` status falls back to `local-logs` estimate + `reactive`. Check whether `/usage` in the interactive TUI exposes numbers (manual step in the round-2 message).
+1. **Claude limits.** Primary source is `claude -p "/usage"` (text parser, `source: cli`). The statusLine hook becomes optional (keep it only as a bonus if a version returns `rate_limits`). `local-logs` estimate stays as the fallback when the text cannot be parsed. Parser must degrade to `unknown`, never throw.
+   - **agy limits.** `agy -p "/quota"` text parser, per group, remaining% converted to `usedPct`, ISO reset time used as is. No unofficial endpoint adapter is needed any more; `agy.quotaAdapter: unofficial` can be dropped from the config.
 2. **Limit detection.** Exit code is unreliable on both CLIs. Detect by: `is_error` / `api_error_status` (claude), `status` + `denied_actions` + stderr text (agy), plus the configured tail patterns. Real limit-message samples are still missing, so the patterns stay configurable and the first real limit hit must be logged verbatim.
 3. **Permissions.** Runner must pass explicit allow-lists (claude: `--allowedTools`; agy: `permissions.allow`), never full bypass. A run with non-empty `permission_denials` / `denied_actions` must be treated as **failed or blocked**, not success.
 4. **agy runner.** Plain `child_process.spawn` with `--output-format json` and `--print-timeout`; no `node-pty`.
