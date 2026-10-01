@@ -114,7 +114,15 @@ describe('saveAttachments', () => {
   });
 
   it('video: frames via ffmpeg when available, a clear note when not; audio is stored with a note', async () => {
-    const b1 = await saveAttachments(project, [{ name: 'clip.mp4', data: Buffer.from('fake video') }, { name: 'voice.mp3', data: Buffer.from('fake audio') }]);
+    // hide any real ffmpeg on this machine so the "not installed" branch is what gets tested
+    const realPath = process.env.PATH;
+    process.env.PATH = join(dir, 'empty-bin');
+    let b1: Awaited<ReturnType<typeof saveAttachments>>;
+    try {
+      b1 = await saveAttachments(project, [{ name: 'clip.mp4', data: Buffer.from('fake video') }, { name: 'voice.mp3', data: Buffer.from('fake audio') }]);
+    } finally {
+      process.env.PATH = realPath;
+    }
     expect(b1.items[0]!.readPaths).toEqual([]);
     expect(b1.items[0]!.note).toMatch(/ffmpeg не знайдено/);
     expect(b1.items[1]!.note).toMatch(/не розшифровується/);

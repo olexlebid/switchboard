@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -65,7 +65,8 @@ const waitFor = async (cond: () => boolean, ms = 30_000) => {
 };
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'sb-launch-'));
+  // realpath: macOS tmpdir is a symlink (/var -> /private/var) and the code under test resolves project paths
+  dir = realpathSync(mkdtempSync(join(tmpdir(), 'sb-launch-')));
   process.env.SB_HOME = join(dir, 'home');
   project = makeRepo();
   writeFileSync(join(dir, 'agy-settings.json'), '{}\n');
@@ -153,7 +154,10 @@ describe('launching real sb processes from the dashboard code', () => {
     expect(id).toMatch(/^t-/);
     await waitFor(() => readState().tasks[id!]?.status === 'done');
     expect(execFileSync('git', ['branch', '--list', 'sb/*'], { cwd: project, encoding: 'utf8' })).toContain(`sb/${id}`);
-    expect(execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim()).toBe('main');
+    // the task is marked done slightly before the process switches the project back, so wait for it
+    const head = () => execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim();
+    await waitFor(() => head() === 'main');
+    expect(head()).toBe('main');
   }, 60_000);
 
   it('reports an immediate failure (dirty working tree) instead of pretending it started', async () => {
