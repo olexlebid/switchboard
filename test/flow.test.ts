@@ -8,7 +8,7 @@ import { SbError, startTask } from '../packages/core/flow';
 import { initProject } from '../packages/core/init';
 import { interpretOutput } from '../packages/core/interpret';
 import { parseProgress } from '../packages/core/progress';
-import { readState } from '../packages/core/store';
+import { readState, sbHome } from '../packages/core/store';
 
 const FAKE = join(import.meta.dirname, 'fake-agent.mjs');
 let dir: string;
@@ -245,5 +245,79 @@ describe('parseProgress', () => {
   it('returns no status when the section is missing or the value is unknown', () => {
     expect(parseProgress(md, 't-9').status).toBeUndefined();
     expect(parseProgress('## Task t-3: x\n- Status: ??\n', 't-3').status).toBeUndefined();
+  });
+});
+
+describe('agy runs with temporary rules', () => {
+  let settings: string;
+  const agyCfg = (extra = '') => {
+    chmodSync(FAKE, 0o755);
+    return parseConfig(`
+agents:
+  claude: { cmd: "${FAKE}" }
+  agy: { cmd: "${FAKE}", settingsPath: "${settings}" }
+routing: { section: [agy, claude] }
+permissions:
+  claude: { allow: [Read] }
+  agy: { allow: ["write_file({project}/)"], deny: ["write_file({project}/.env)"] }
+${extra}
+`);
+  };
+  const ORIGINAL = '{"colorScheme":"dark"}\n';
+
+  beforeEach(() => {
+    settings = join(dir, 'agy-settings.json');
+    writeFileSync(settings, ORIGINAL);
+    process.env.FAKE_AGENT_STYLE = 'agy';
+    process.env.FAKE_AGY_SETTINGS = settings;
+  });
+  afterEach(() => { delete process.env.FAKE_AGY_SETTINGS; });
+
+  it('lets agy write inside the project during the run and restores settings afterwards', async () => {
+    const r = await startTask(input({ agent: 'agy' }), agyCfg());
+    expect(r.task.status).toBe('done'); // the fake could only write because the rule was in place
+    expect(git('show', '--stat', '--format=', r.task.branch)).toContain('Footer.astro');
+    expect(readFileSync(settings, 'utf8')).toBe(ORIGINAL);
+    expect(existsSync(join(sbHome(), 'agy-rules-journal.json'))).toBe(false);
+  });
+
+  it('without a configured rule agy stays blocked and the settings are never touched', async () => {
+    const cfg = parseConfig(`
+agents:
+  claude: { cmd: "${FAKE}" }
+  agy: { cmd: "${FAKE}", settingsPath: "${settings}" }
+routing: { section: [agy] }
+permissions: { agy: { allow: [] } }
+`);
+    const r = await startTask(input({ agent: 'agy' }), cfg);
+    expect(r.task.status).toBe('blocked');
+    expect(r.outcome.denied).toEqual(['write_file']);
+    expect(readFileSync(settings, 'utf8')).toBe(ORIGINAL);
+  });
+
+  it('restores the settings after a timeout', async () => {
+    process.env.FAKE_AGENT_MODE = 'hang-agy';
+    const r = await startTask(input({ agent: 'agy', timeoutMin: 0.03 }), agyCfg());
+    expect(r.task.status).toBe('failed');
+    expect(readFileSync(settings, 'utf8')).toBe(ORIGINAL);
+  }, 30_000);
+
+  it('refuses to start while another agy run holds the rules', async () => {
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(sbHome(), { recursive: true });
+    writeFileSync(join(sbHome(), 'agy-rules-journal.json'), JSON.stringify({ settingsPath: settings, backupPath: '', originalExisted: true, permissionsExisted: false, writtenHash: 'x', added: { allow: [], deny: [] }, pid: process.ppid, project: '/other', startedAt: '' }));
+    await expect(startTask(input({ agent: 'agy' }), agyCfg())).rejects.toMatchObject({ exitCode: 3 });
+    expect(git('branch', '--list', 'sb/*').split('\n').filter(Boolean).length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('protected paths', () => {
+  it('marks a run that changed netlify.toml as blocked and never pushes it', async () => {
+    process.env.FAKE_AGENT_MODE = 'protected';
+    const r = await startTask(input(), cfg('git: { pushBranches: true }'));
+    expect(r.task.status).toBe('blocked');
+    expect(r.run.reason).toContain('netlify.toml');
+    expect(r.warnings.join(' ')).not.toMatch(/push не вдався/); // push was skipped, not attempted
+    expect(r.warnings.join(' ')).toMatch(/Захищені файли/);
   });
 });

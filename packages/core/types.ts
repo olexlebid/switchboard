@@ -46,6 +46,8 @@ export type AgentConfig = {
   headlessArgs: string[];
   usageArgs: string[];
   models: string[];
+  /** agy only: user-level settings file where headless permission rules live. */
+  settingsPath?: string;
 };
 
 export type Thresholds = {
@@ -104,7 +106,7 @@ export type SwitchboardConfig = {
   thresholds: Thresholds;
   routing: Record<string, AgentId[]>;
   run: { timeoutMin: number };
-  git: { pushBranches: boolean };
+  git: { pushBranches: boolean; protectedPaths: string[] };
   /** Per-agent permission rules and extra CLI args used for headless runs. */
   permissions: Record<AgentId, PermissionRules & { args: string[] }>;
 };

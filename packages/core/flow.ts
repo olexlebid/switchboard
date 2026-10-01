@@ -1,8 +1,12 @@
 // One task, one agent: branch, task file, run, interpret, commit. (Routing and failover come in stage 4.)
-import { existsSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { onExit } from './cleanup';
+import { AgyPermissionError, applyAgyRules, DEFAULT_AGY_SETTINGS, recoverAgyRules, type AgyRuleHandle } from './agy-permissions';
 import { checkoutBranch, changedFiles, commitAll, currentBranch, dirtyFiles, headSha, isGitRepo, pushBranch, switchBack } from './git';
 import { interpretOutput, type Outcome } from './interpret';
+import { protectedTouched } from './protected';
 import { readProgress, type ProgressInfo } from './progress';
 import { buildStartPrompt } from './prompt';
 import { buildAgentArgs, logPathFor, runAgentProcess } from './runner';
@@ -77,6 +81,19 @@ export async function startTask(input: StartInput, cfg: SwitchboardConfig, say: 
   };
 
   await checkoutBranch(project, task.branch);
+  // If sb is interrupted (Ctrl+C / kill) while the agent works, keep its work as a wip checkpoint
+  // and mark the task, instead of leaving uncommitted changes and a task stuck in "running".
+  const unregisterInterrupt = onExit(() => {
+    const git = (...args: string[]) => spawnSync('git', args, { cwd: project, encoding: 'utf8' });
+    if (git('status', '--porcelain').stdout.trim()) {
+      const identity = git('config', 'user.email').stdout.trim() ? [] : ['-c', 'user.name=Switchboard', '-c', 'user.email=switchboard@localhost'];
+      git('add', '-A');
+      git(...identity, 'commit', '-m', `wip(sb): checkpoint ${id} interrupted`);
+    }
+    task.status = 'failed';
+    task.note = `перервано користувачем; робота збережена в ${task.branch} (проєкт лишився на цій гілці)`;
+    saveTask(task);
+  }, 2);
   try {
     writeTaskFile(task);
     if (!existsSync(resolve(project, 'RULES.md'))) warnings.push('У проєкті немає RULES.md: запусти `sb init <проєкт>`, щоб агенти знали правила.');
@@ -95,14 +112,47 @@ export async function startTask(input: StartInput, cfg: SwitchboardConfig, say: 
     saveRun(run);
 
     say(`▶ ${agent}: ${taskTitle(task.text)}\n  гілка ${task.branch}, тайм-аут ${Math.round(timeoutMs / 60_000)} хв\n  лог: ${logPath}`);
-    const proc = await runAgentProcess({
-      cmd: cfg.agents[agent].cmd,
-      args,
-      cwd: project,
-      timeoutMs,
-      logPath,
-      logHeader: `[switchboard] ${new Date().toISOString()} task=${id} agent=${agent} branch=${task.branch}\n[switchboard] ${cfg.agents[agent].cmd} ${args.map((a) => (a === prompt ? '<prompt>' : a)).join(' ')}`,
-    });
+
+    // agy takes permissions only from its user-level settings: add a directory-scoped rule for this run.
+    let rules: AgyRuleHandle | undefined;
+    if (agent === 'agy' && cfg.permissions.agy.allow.length > 0) {
+      try {
+        const recovered = recoverAgyRules();
+        if (recovered) warnings.push(recovered);
+        const real = realpathSync(project);
+        const fill = (list: string[]) => list.map((r) => r.replaceAll('{project}', real));
+        rules = applyAgyRules({
+          settingsPath: cfg.agents.agy.settingsPath ?? DEFAULT_AGY_SETTINGS,
+          project: real,
+          allow: fill(cfg.permissions.agy.allow),
+          deny: fill(cfg.permissions.agy.deny),
+        });
+        say(`  agy: тимчасовий дозвіл на запис лише в ${real}/ (знімається після запуску)`);
+      } catch (e) {
+        if (e instanceof AgyPermissionError) throw new SbError(e.message, 3);
+        throw e;
+      }
+    }
+    let proc;
+    try {
+      proc = await runAgentProcess({
+        cmd: cfg.agents[agent].cmd,
+        args,
+        cwd: project,
+        timeoutMs,
+        logPath,
+        logHeader: `[switchboard] ${new Date().toISOString()} task=${id} agent=${agent} branch=${task.branch}\n[switchboard] ${cfg.agents[agent].cmd} ${args.map((a) => (a === prompt ? '<prompt>' : a)).join(' ')}`,
+      });
+    } finally {
+      // Always take the temporary agy rules away again, also after a timeout or an error.
+      if (rules) {
+        try {
+          rules.restore();
+        } catch (e) {
+          warnings.push(`Не вдалося зняти тимчасові правила agy: ${(e as Error).message}`);
+        }
+      }
+    }
 
     const outcome: Outcome = proc.spawnError
       ? { ok: false, denied: [], error: `cannot run "${cfg.agents[agent].cmd}": ${proc.spawnError}` }
@@ -140,10 +190,16 @@ export async function startTask(input: StartInput, cfg: SwitchboardConfig, say: 
       : `wip(sb): checkpoint ${id} from ${agent}`;
     const sha = await commitAll(project, message);
     const files = await changedFiles(project, baseSha);
+    const touchedProtected = protectedTouched(files, cfg.git.protectedPaths);
+    if (touchedProtected.length > 0) {
+      run.status = 'blocked';
+      run.reason = `агент змінив захищені файли: ${touchedProtected.join(', ')}`;
+      warnings.push(`Захищені файли змінено (${touchedProtected.join(', ')}): гілку не буде запушено, перевір diff.`);
+    }
     if (outcome.ok && !files.includes('PROGRESS.md')) warnings.push('Агент не оновив PROGRESS.md.');
     if (outcome.ok && !sha) warnings.push('Агент нічого не змінив: комітити нічого.');
 
-    if (cfg.git.pushBranches && files.length > 0) {
+    if (cfg.git.pushBranches && files.length > 0 && touchedProtected.length === 0) {
       try {
         await pushBranch(project, task.branch);
       } catch (e) {
@@ -151,7 +207,7 @@ export async function startTask(input: StartInput, cfg: SwitchboardConfig, say: 
       }
     }
 
-    task.status = agentUnfinished ? 'waiting' : status === 'done' ? 'done' : status === 'blocked' ? 'blocked' : 'failed';
+    task.status = touchedProtected.length > 0 ? 'blocked' : agentUnfinished ? 'waiting' : status === 'done' ? 'done' : status === 'blocked' ? 'blocked' : 'failed';
     task.note = run.reason ?? run.summary?.slice(0, 200);
     saveRun(run);
     saveTask(task);
@@ -163,6 +219,7 @@ export async function startTask(input: StartInput, cfg: SwitchboardConfig, say: 
     saveTask(task);
     throw e;
   } finally {
+    unregisterInterrupt();
     // Leave the project on the branch it was on before, with the task branch intact.
     try {
       if ((await currentBranch(project)) !== baseBranch) await switchBack(project, baseBranch);

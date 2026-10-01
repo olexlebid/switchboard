@@ -50,6 +50,7 @@ export function parseConfig(text: string): SwitchboardConfig {
       headlessArgs: strArray(a.headlessArgs, `agents.${id}.headlessArgs`, ['-p']),
       usageArgs: strArray(a.usageArgs, `agents.${id}.usageArgs`, id === 'claude' ? ['-p', '/usage'] : ['-p', '/quota']),
       models: strArray(a.models, `agents.${id}.models`, []),
+      settingsPath: typeof a.settingsPath === 'string' ? a.settingsPath : undefined,
     };
   }
 
@@ -99,7 +100,10 @@ export function parseConfig(text: string): SwitchboardConfig {
     thresholds,
     routing,
     run: { timeoutMin: num(raw.run?.timeoutMin, 'run.timeoutMin', 20) },
-    git: { pushBranches: raw.git?.pushBranches === true },
+    git: {
+      pushBranches: raw.git?.pushBranches === true,
+      protectedPaths: strArray(raw.git?.protectedPaths, 'git.protectedPaths', ['netlify.toml', '.env*']),
+    },
     permissions,
   };
 }

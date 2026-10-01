@@ -6,7 +6,8 @@
 //   denied   writes nothing, reports a denied Write
 //   hang     never finishes (also spawns a child shell to test process-group kill)
 //   error    prints to stderr and exits 1
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const args = process.argv.slice(2);
@@ -29,12 +30,30 @@ function report({ ok = true, denied = [], text = 'done' }) {
   }
 }
 
+// With FAKE_AGY_SETTINGS the fake behaves like agy: a write only works when the settings file holds a
+// matching directory rule `write_file(<dir>/)` (and no matching deny rule). Denied writes are reported.
+const denied = [];
+function canWrite(rel) {
+  const settingsPath = process.env.FAKE_AGY_SETTINGS;
+  if (style !== 'agy' || !settingsPath) return true;
+  let s = {};
+  try { s = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch { /* no settings: nothing allowed */ }
+  const abs = resolve(realpathSync(process.cwd()), rel);
+  const rules = (list) => (list ?? []).map((r) => /^write_file\((.*)\)$/.exec(r)?.[1]).filter(Boolean);
+  const hit = (r) => (r.endsWith('/') ? abs.startsWith(r) : abs === r);
+  const ok = rules(s.permissions?.allow).some(hit) && !rules(s.permissions?.deny).some(hit);
+  if (!ok) denied.push('write_file');
+  return ok;
+}
+
 function writeWork() {
+  if (!canWrite('src/components/Footer.astro')) return;
   mkdirSync('src/components', { recursive: true });
   writeFileSync('src/components/Footer.astro', '---\n// fake footer\n---\n<footer class="footer section"></footer>\n');
 }
 
 function writeProgress(status = process.env.FAKE_PROGRESS_STATUS ?? 'done') {
+  if (!canWrite('PROGRESS.md')) return;
   const questions = status === 'blocked' ? '- Open questions:\n  - No Astro project, build not verified\n' : '';
   appendFileSync('PROGRESS.md', `\n## Task ${taskId}: Footer\n- Status: ${status}\n- Last agent: ${style === 'agy' ? 'agy' : 'claude'}\n- Done:\n  - [x] Footer (src/components/Footer.astro)\n${questions}`);
 }
@@ -44,7 +63,17 @@ switch (mode) {
     console.log('working... api key sk-abcdefgh12345678 should never reach the log');
     writeWork();
     writeProgress();
-    report({ text: 'Created Footer.astro' });
+    report({ text: 'Created Footer.astro', denied: [...new Set(denied)] });
+    break;
+  case 'protected':
+    writeWork();
+    writeProgress();
+    writeFileSync('netlify.toml', '[build]\n');
+    report({ text: 'Also touched netlify.toml' });
+    break;
+  case 'hang-agy':
+    writeWork();
+    setTimeout(() => {}, 60_000);
     break;
   case 'partial':
     writeWork();

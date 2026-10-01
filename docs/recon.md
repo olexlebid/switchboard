@@ -24,6 +24,10 @@ Manual `/usage` and `/quota` checks and round 2 (`scripts/recon.sh round2`) done
 | 17 | Quota is per model group in agy | Per-model bars | Models inside a group share one weekly and one 5-hour limit; quota is consumed proportionally to token cost (text in the `/quota` TUI) | Dashboard shows 2 groups x 2 bars. Router must know which group a chosen `--model` belongs to |
 | 18 | Rules file read by `agy` (round 2, no tools needed) | GEMINI.md / AGENTS.md / other | `GEMINI.md` **yes**, `AGENTS.md` **yes**, `CLAUDE.md` **no**. A global `~/.gemini/GEMINI.md` also exists on this machine and applies to every run | Resolved. `sb init` writes `AGENTS.md` for agy (neutral name), `CLAUDE.md` for claude. Warn if a global `~/.gemini/GEMINI.md` is present |
 | 19 | Account type (`claude auth status`) | Pro | `authMethod: claude.ai`, `subscriptionType: pro`, JSON output | OK. This command is a cheap login/plan check for `sb status` |
+| 20 | agy permissions: where rules live (rounds 3-4) | Project-level or CLI flag | Project-level `settings.json` files (5 candidate paths), `--mode accept-edits` and `--sandbox` are **all ignored/insufficient**. Rules are read only from the **user-level** `~/.gemini/antigravity-cli/settings.json` (`permissions.allow`). `write_file(*)` works, bare `write_file` does not. Workspace trust (`trustedWorkspaces`) has no effect | Resolved: temporary user-level rule per run |
+| 21 | agy shell access (rounds 4-5) | Maybe allowed | Shell action name is `command` (`command(*)` allows). Patterns are strict (`command(echo *)` did not cover `echo ... > file`). **`deny` did NOT stop `rm`** when `command(*)` was allowed | **Shell is never granted to agy**: no reliable deny-list |
+| 22 | agy write scoping (rounds 5-7) | Glob patterns | `write_file(<dir>/*)` and `<dir>/**` match **nothing**. A directory prefix **`write_file(<dir>/)`** works: covers nested folders, blocks outside paths and a sibling dir with the same name prefix (`proj2`). `deny` with the same form blocked the subdirectory, but **silently** (no `denied_actions` entry) | Resolved: `write_file({project}/)` for the run; protected-paths check as the safety net |
+| 23 | Account type and models | - | `claude auth status`: `subscriptionType: pro`. `agy models` lists 14 models in 2 quota groups | OK |
 
 ## Consequences for the design
 
@@ -44,3 +48,10 @@ Manual `/usage` and `/quota` checks and round 2 (`scripts/recon.sh round2`) done
 - `agy.quotaAdapter` option is removed from the config; `claude-statusline.mjs` stays optional.
 - Limit detection does not trust exit codes; success requires empty `permission_denials` / `denied_actions`.
 - No `node-pty`.
+
+## Stage 3 decisions from recon rounds 3-7
+- **agy permissions are temporary and directory-scoped.** `sb run --agent agy` backs up `~/.gemini/antigravity-cli/settings.json`, adds `write_file(<real project path>/)` (+ best-effort deny for `.env` and `netlify.toml`), and removes exactly those rules when the run ends. A journal (`~/.switchboard/agy-rules-journal.json`) lets the next run repair a crash; a second concurrent run is refused; Ctrl+C / kill also restore the file.
+- **No shell for agy.** Tasks that need `git`/`pnpm`/`astro` should go to Claude (routing: `section`, `copy` already prefer Claude).
+- **Protected paths** (`git.protectedPaths`: `netlify.toml`, `.env*`): checked after every run for every agent. A touch makes the run `blocked` and the branch is never pushed. This covers the silent deny.
+- **Interrupted runs** (Ctrl+C / kill) leave a `wip(sb): checkpoint <id> interrupted` commit on the task branch and a `failed` task; the project stays on that branch.
+- While an agy run is active the same temporary rule also applies to the user's own interactive agy sessions in that project directory.

@@ -9,6 +9,7 @@ agents:
     cmd: agy
     headlessArgs: ["-p", "--output-format", "json"]
     usageArgs: ["-p", "/quota"]      # prints per-group quota lines (recon row 16)
+    settingsPath: "~/.gemini/antigravity-cli/settings.json"   # where agy reads permissions.allow (recon rounds 4-7)
     models: []
 
 limits:
@@ -39,6 +40,9 @@ run:
 
 git:
   pushBranches: false     # true: push sb/<id> to origin after a run (Netlify deploy preview). Never pushes main.
+  protectedPaths:         # a run that changes one of these files is marked "blocked" and is never pushed
+    - netlify.toml
+    - ".env*"
 
 # Headless runs cannot ask for confirmation, so everything an agent may do is listed here.
 # Anything not allowed is denied and reported as "blocked". No full permission bypass is used.
@@ -78,7 +82,13 @@ permissions:
       - "Edit(./netlify.toml)"
       - "Write(./netlify.toml)"
   agy:
-    # Filled after the agy permission probe (`scripts/recon.sh round3`), see docs/recon.md.
-    allow: []
-    deny: []
+    # agy reads rules only from its USER-level settings file, so Switchboard adds these rules for the
+    # duration of one run and removes exactly them afterwards ({project} = real path of the project).
+    # Write access is a directory prefix (must end with "/"). Shell (`command(...)`) is deliberately
+    # NOT granted: `deny` does not stop shell commands in agy (recon round 5), so it cannot be made safe.
+    allow:
+      - "write_file({project}/)"
+    deny:                 # best effort: agy does not report these as denied_actions; protectedPaths is the safety net
+      - "write_file({project}/.env)"
+      - "write_file({project}/netlify.toml)"
     args: []

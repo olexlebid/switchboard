@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { chmodSync, closeSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
+import { onExit } from './cleanup';
 import { maskSecrets } from './mask';
 import { runsDir } from './store';
 import type { AgentConfig, AgentId, PermissionRules } from './types';
@@ -105,6 +106,8 @@ export async function runAgentProcess(opts: {
     const killGroup = (signal: NodeJS.Signals) => {
       try { if (child.pid) process.kill(-child.pid, signal); } catch { /* already gone */ }
     };
+    // If sb is interrupted (Ctrl+C, kill), do not leave the agent running unattended.
+    const unregisterKill = onExit(() => killGroup('SIGTERM'), 0);
     const timer = setTimeout(() => {
       timedOut = true;
       log.header(`[switchboard] timeout after ${Math.round(opts.timeoutMs / 1000)}s, stopping the agent`);
@@ -116,6 +119,7 @@ export async function runAgentProcess(opts: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      unregisterKill();
       log.close();
       resolve({ ...r, stdout, stderr, durationMs: Date.now() - started });
     };
