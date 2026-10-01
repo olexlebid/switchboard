@@ -6,15 +6,18 @@ const POLL_IDLE_MS = 30_000;
 const POLL_BUSY_MS = 3_000;
 
 /** Polls /api/state; faster while a task or a chat turn runs. `reload` fetches immediately. */
-export function useDashboard() {
+export function useDashboard(project: string | undefined) {
   const [state, setState] = useState<DashboardState>();
   const [offline, setOffline] = useState(false);
+  const projectRef = useRef(project);
+  projectRef.current = project;
   const busyRef = useRef(false);
   const timer = useRef<number>(undefined);
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/state', { cache: 'no-store' });
+      const q = projectRef.current ? `?project=${encodeURIComponent(projectRef.current)}` : '';
+      const res = await fetch(`/api/state${q}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(String(res.status));
       const next = (await res.json()) as DashboardState;
       busyRef.current = next.busy;
@@ -40,6 +43,9 @@ export function useDashboard() {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [load]);
+
+  // A project switch must not wait for the next poll.
+  useEffect(() => { void load(); }, [project, load]);
 
   return { state, offline, reload: load };
 }
