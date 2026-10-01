@@ -141,7 +141,9 @@ say "agy on PATH:    $HAVE_AGY ($(command -v agy 2>/dev/null | mask))"
 [ "$HAVE_AGY" = 1 ] && say "agy --version:    $(agy --version 2>&1 | head -1)"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sb-recon.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+finalize() { rm -rf "$WORK"; [ -f "$REPORT" ] && mask <"$REPORT" >"$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"; }
+trap finalize EXIT
+trap 'exit 130' INT TERM
 mkdir -p "$WORK"
 
 # ---- help output + interesting flags
@@ -240,20 +242,41 @@ else
 fi
 
 # ---- examples of limit messages
+# Bounded on purpose: only recent small files, a pattern without a leading
+# wildcard (fast on BSD grep), at most 3 hits per file and a hard 60 s timeout.
 head_ "5. Limit-message examples found locally (max 8 lines, 160 chars each)"
-PAT='(usage limit|limit reached|hit your .{0,20}limit|limit will reset|resets [0-9]|resets at|rate_limit_error|RESOURCE_EXHAUSTED)'
-if [ -d "$HOME/.claude/projects" ]; then
-  say "claude sessions:"
-  grep -rhoiE ".{0,70}${PAT}.{0,70}" --include='*.jsonl' "$HOME/.claude/projects" 2>/dev/null | head -n 8 | cut -c1-160 | sed 's/^/    /' >>"$REPORT"
+PAT='(usage limit|limit reached|limit will reset|resets at|rate_limit_error|RESOURCE_EXHAUSTED)'
+find_limit_lines() { # find_limit_lines <dir> <name-glob>...
+  local dir=$1; shift
+  local args=() g
+  for g in "$@"; do args+=(-o -name "$g"); done
+  find "$dir" -type f -mtime -30 -size -5000k \( -name '__none__' "${args[@]}" \) -print0 2>/dev/null \
+    | tr '\0' '\n' | head -n 60 | tr '\n' '\0' \
+    | xargs -0 grep -m 3 -hoiE "${PAT}.{0,100}" 2>/dev/null \
+    | head -n 8 | cut -c1-160
+}
+if [ "${SB_RECON_SKIP_LOGS:-0}" = 1 ]; then
+  say "SKIPPED (SB_RECON_SKIP_LOGS=1)"
+else
+  if [ -d "$HOME/.claude/projects" ]; then
+    say "claude sessions:"
+    run_to 60 "$WORK/limits.claude" find_limit_lines "$HOME/.claude/projects" '*.jsonl'
+    say "    (exit code $RC, 124 = timeout)"
+    dump "$WORK/limits.claude" 8
+  fi
+  say "agy/gemini/antigravity config dirs found (names only):"
+  for d in "$HOME/.gemini" "$HOME/.antigravity" "$HOME/.antigravity_cli" "$HOME/.config/antigravity" "$HOME/.config/agy" \
+           "$HOME/Library/Application Support/Antigravity" "$HOME/Library/Application Support/agy"; do
+    [ -d "$d" ] && say "    $(printf '%s' "$d" | mask)"
+  done
+  for d in "$HOME/.gemini" "$HOME/.antigravity" "$HOME/.config/antigravity"; do
+    if [ -d "$d" ]; then
+      run_to 60 "$WORK/limits.agy" find_limit_lines "$d" '*.log' '*.jsonl'
+      say "    $(basename "$d") logs (exit code $RC):"
+      dump "$WORK/limits.agy" 8
+    fi
+  done
 fi
-say "agy/gemini/antigravity config dirs found (names only):"
-for d in "$HOME/.gemini" "$HOME/.antigravity" "$HOME/.antigravity_cli" "$HOME/.config/antigravity" "$HOME/.config/agy" \
-         "$HOME/Library/Application Support/Antigravity" "$HOME/Library/Application Support/agy"; do
-  [ -d "$d" ] && say "    $(printf '%s' "$d" | mask)"
-done
-for d in "$HOME/.gemini" "$HOME/.antigravity" "$HOME/.config/antigravity"; do
-  [ -d "$d" ] && grep -rhoiE ".{0,70}${PAT}.{0,70}" --include='*.log' --include='*.jsonl' "$d" 2>/dev/null | head -n 8 | cut -c1-160 | sed 's/^/    /' >>"$REPORT"
-done
 
 # ---- statusLine probe setup (manual step, project-local settings only)
 rm -rf "$PROBE_DIR"; mkdir -p "$PROBE_DIR/.claude"
