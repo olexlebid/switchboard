@@ -22,6 +22,9 @@ export type AgentOverview = {
   weeklyPct?: number;
   /** Why the last fresh read failed, if it did. */
   error?: string;
+  /** Active reactive "out of quota" mark (set when a run hit a limit): usable again after this time. */
+  exhaustedUntil?: string;
+  exhaustedReason?: string;
 };
 
 export type ManualCardOverview = { id: string; title: string; state?: 'available' | 'exhausted'; at?: string };
@@ -60,7 +63,8 @@ export function buildOverview(cfg: SwitchboardConfig, now = new Date(), errors: 
   const state = readState();
   const agents = AGENT_ORDER.map((agent): AgentOverview => {
     const snapshot = state.snapshots[agent];
-    const r = computeStatus(snapshot, cfg.thresholds, cfg.limits.staleAfterMin, now, state.exhausted[agent]);
+    const mark = state.exhausted[agent];
+    const r = computeStatus(snapshot, cfg.thresholds, cfg.limits.staleAfterMin, now, mark);
     return {
       agent,
       title: AGENT_TITLES[agent],
@@ -73,6 +77,8 @@ export function buildOverview(cfg: SwitchboardConfig, now = new Date(), errors: 
       fiveHourPct: r.fiveHourPct,
       weeklyPct: r.weeklyPct,
       error: errors[agent],
+      exhaustedUntil: mark && Date.parse(mark.until) > now.getTime() ? mark.until : undefined,
+      exhaustedReason: mark && Date.parse(mark.until) > now.getTime() ? mark.reason : undefined,
     };
   });
 

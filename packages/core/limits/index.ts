@@ -23,14 +23,14 @@ async function agyModelCount(cfg: SwitchboardConfig, timeoutMs: number, now: Dat
   return count;
 }
 
-export async function collectUsage(cfg: SwitchboardConfig, now = new Date()): Promise<CollectResult[]> {
+export async function collectUsage(cfg: SwitchboardConfig, now = new Date(), only?: AgentId[]): Promise<CollectResult[]> {
   const timeoutMs = cfg.limits.fetchTimeoutSec * 1000;
   const jobs: Record<AgentId, () => Promise<UsageSnapshot>> = {
     claude: () => fetchClaudeUsage(cfg.agents.claude, timeoutMs, now),
     agy: async () => fetchAgyUsage(cfg.agents.agy, timeoutMs, now, await agyModelCount(cfg, timeoutMs, now)),
   };
 
-  const ids = Object.keys(jobs) as AgentId[];
+  const ids = (Object.keys(jobs) as AgentId[]).filter((id) => !only || only.includes(id));
   const settled = await Promise.allSettled(ids.map((id) => jobs[id]()));
 
   return ids.map((agent, i): CollectResult => {

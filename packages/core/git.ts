@@ -80,3 +80,13 @@ export async function pushBranch(cwd: string, branch: string): Promise<void> {
   if (!branch.startsWith('sb/')) throw new GitError(`refusing to push non-task branch "${branch}"`);
   await gitOk(cwd, ['push', '-u', 'origin', branch]);
 }
+
+/** Stages everything (including new files). */
+export async function stageAll(cwd: string): Promise<void> {
+  await gitOk(cwd, ['add', '-A']);
+}
+
+/** `git diff --cached --stat <base>`: everything staged plus earlier commits, compared with the task start. */
+export async function stagedStat(cwd: string, base: string): Promise<string> {
+  return gitOk(cwd, ['diff', '--cached', '--stat', base]);
+}

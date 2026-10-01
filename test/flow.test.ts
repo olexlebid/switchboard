@@ -4,15 +4,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig } from '../packages/core/config';
-import { SbError, startTask } from '../packages/core/flow';
+import { SbError, startTask, type StartInput } from '../packages/core/flow';
 import { initProject } from '../packages/core/init';
 import { interpretOutput } from '../packages/core/interpret';
 import { parseProgress } from '../packages/core/progress';
+import { buildOverview } from '../packages/core/overview';
 import { readState, sbHome } from '../packages/core/store';
 
 const FAKE = join(import.meta.dirname, 'fake-agent.mjs');
 let dir: string;
 let project: string;
+
+/** startTask with all outside-world dependencies stubbed: no real CLI is ever asked for usage. */
+const start = (i: StartInput, c: ReturnType<typeof parseConfig>) =>
+  startTask(i, c, () => {}, { overview: async () => buildOverview(c).agents, readUsage: async () => undefined, notify: async () => false });
 
 const git = (...args: string[]) => execFileSync('git', args, { cwd: project, encoding: 'utf8' }).trim();
 
@@ -62,10 +67,10 @@ afterEach(() => {
 describe('startTask', () => {
   it('runs on sb/<id>, commits the result, masks secrets, returns to main', async () => {
     const mainBefore = git('rev-parse', 'main');
-    const r = await startTask(input(), cfg());
+    const r = await start(input(), cfg());
 
     expect(r.task.status).toBe('done');
-    expect(r.run.status).toBe('done');
+    expect(r.run!.status).toBe('done');
     expect(r.task.branch).toBe(`sb/${r.task.id}`);
     expect(git('rev-parse', '--abbrev-ref', 'HEAD')).toBe('main'); // back where we started
     expect(git('rev-parse', 'main')).toBe(mainBefore); // main never touched
@@ -76,7 +81,7 @@ describe('startTask', () => {
     expect(git('log', '-1', '--format=%s', r.task.branch)).toMatch(/^feat\(sb\): Create Footer\.astro/);
     expect(r.warnings).not.toContain('Агент не оновив PROGRESS.md.');
 
-    const log = readFileSync(r.run.logPath, 'utf8');
+    const log = readFileSync(r.run!.logPath, 'utf8');
     expect(log).not.toContain('sk-abcdefgh12345678');
     expect(log).toContain('<token>');
     expect(log).not.toContain('Create Footer.astro from DESIGN.md'); // the prompt is not dumped into the log
@@ -85,22 +90,22 @@ describe('startTask', () => {
 
   it("a run that ends with 'Status: blocked' in PROGRESS.md is blocked, with the open question as reason (seen in the first real run)", async () => {
     process.env.FAKE_PROGRESS_STATUS = 'blocked';
-    const r = await startTask(input(), cfg());
-    expect(r.outcome.ok).toBe(true); // the process itself succeeded
+    const r = await start(input(), cfg());
+    expect(r.outcome!.ok).toBe(true); // the process itself succeeded
     expect(r.task.status).toBe('blocked');
-    expect(r.run.reason).toContain('No Astro project, build not verified');
+    expect(r.run!.reason).toContain('No Astro project, build not verified');
     expect(git('log', '-1', '--format=%s', r.task.branch)).toMatch(/^wip\(sb\)/);
   });
 
   it("'Status: in-progress' leaves the task waiting for a continuation", async () => {
     process.env.FAKE_PROGRESS_STATUS = 'in-progress';
-    const r = await startTask(input(), cfg());
+    const r = await start(input(), cfg());
     expect(r.task.status).toBe('waiting');
     expect(git('log', '-1', '--format=%s', r.task.branch)).toMatch(/^wip\(sb\)/);
   });
 
   it('writes the task file with type, branch and definition of done', async () => {
-    const r = await startTask(input({ figma: 'https://figma.com/x', priority: 'high' }), cfg());
+    const r = await start(input({ figma: 'https://figma.com/x', priority: 'high' }), cfg());
     const md = git('show', `${r.task.branch}:.sb/tasks/${r.task.id}.md`);
     expect(md).toContain('- Type: section');
     expect(md).toContain('- Priority: high');
@@ -110,76 +115,76 @@ describe('startTask', () => {
 
   it('refuses a dirty working tree without creating a branch', async () => {
     writeFileSync(join(project, 'notes.txt'), 'uncommitted');
-    await expect(startTask(input(), cfg())).rejects.toMatchObject({ exitCode: 3 });
+    await expect(start(input(), cfg())).rejects.toMatchObject({ exitCode: 3 });
     expect(git('branch', '--list', 'sb/*')).toBe('');
   });
 
   it('marks a run with denied tools as blocked and keeps partial work in a wip checkpoint', async () => {
     process.env.FAKE_AGENT_MODE = 'partial';
-    const r = await startTask(input(), cfg());
+    const r = await start(input(), cfg());
     expect(r.task.status).toBe('blocked');
-    expect(r.run.reason).toBe('denied: Write');
+    expect(r.run!.reason).toBe('denied: Write');
     expect(git('log', '-1', '--format=%s', r.task.branch)).toMatch(/^wip\(sb\): checkpoint/);
     expect(git('show', '--stat', '--format=', r.task.branch)).toContain('Footer.astro');
   });
 
   it('treats a denied-only run with no changes as blocked, not done', async () => {
     process.env.FAKE_AGENT_MODE = 'denied';
-    const r = await startTask(input(), cfg());
+    const r = await start(input(), cfg());
     expect(r.task.status).toBe('blocked');
-    expect(r.outcome.denied).toEqual(['Write']);
+    expect(r.outcome!.denied).toEqual(['Write']);
   });
 
   it('kills a hanging agent (including its child processes) at the timeout', async () => {
     process.env.FAKE_AGENT_MODE = 'hang';
     const t0 = Date.now();
-    const r = await startTask(input({ timeoutMin: 0.03 }), cfg());
+    const r = await start(input({ timeoutMin: 0.03 }), cfg());
     expect(Date.now() - t0).toBeLessThan(15_000);
     expect(r.task.status).toBe('failed');
-    expect(r.run.reason).toMatch(/timeout/);
-    expect(readFileSync(r.run.logPath, 'utf8')).toContain('timeout after');
+    expect(r.run!.reason).toMatch(/timeout/);
+    expect(readFileSync(r.run!.logPath, 'utf8')).toContain('timeout after');
   }, 30_000);
 
   it('reports a failing agent and a missing binary as failed', async () => {
     process.env.FAKE_AGENT_MODE = 'error';
-    expect((await startTask(input(), cfg())).task.status).toBe('failed');
+    expect((await start(input(), cfg())).task.status).toBe('failed');
     const bad = parseConfig(`
 agents:
   claude: { cmd: "${join(dir, 'nope')}" }
   agy: { cmd: "${FAKE}" }
 routing: { section: [claude] }
 `);
-    const r = await startTask(input(), bad);
+    const r = await start(input(), bad);
     expect(r.task.status).toBe('failed');
-    expect(r.run.reason).toMatch(/cannot run/);
+    expect(r.run!.reason).toMatch(/cannot run/);
   });
 
   it('understands the agy output format and an explicit --agent', async () => {
     process.env.FAKE_AGENT_STYLE = 'agy';
-    const r = await startTask(input({ agent: 'agy' }), cfg());
+    const r = await start(input({ agent: 'agy' }), cfg());
     expect(r.task.agent).toBe('agy');
     expect(r.task.status).toBe('done');
   });
 
   it('uses the first agent of the routing list for the task type', async () => {
     process.env.FAKE_AGENT_STYLE = 'agy';
-    const r = await startTask(input({ type: 'review' }), cfg());
+    const r = await start(input({ type: 'review' }), cfg());
     expect(r.task.agent).toBe('agy');
   });
 
   it('push failures (no remote) are warnings, never errors', async () => {
-    const r = await startTask(input(), cfg('git: { pushBranches: true }'));
+    const r = await start(input(), cfg('git: { pushBranches: true }'));
     expect(r.task.status).toBe('done');
     expect(r.warnings.join(' ')).toMatch(/push не вдався/);
   });
 
   it('validates project, type and text', async () => {
-    await expect(startTask(input({ project: join(dir, 'missing') }), cfg())).rejects.toBeInstanceOf(SbError);
-    await expect(startTask(input({ type: 'nope' }), cfg())).rejects.toThrow(/Невідомий тип/);
-    await expect(startTask(input({ text: '  ' }), cfg())).rejects.toThrow(/Порожній/);
+    await expect(start(input({ project: join(dir, 'missing') }), cfg())).rejects.toBeInstanceOf(SbError);
+    await expect(start(input({ type: 'nope' }), cfg())).rejects.toThrow(/Невідомий тип/);
+    await expect(start(input({ text: '  ' }), cfg())).rejects.toThrow(/Порожній/);
     const plain = join(dir, 'plain');
     execFileSync('mkdir', ['-p', plain]);
-    await expect(startTask(input({ project: plain }), cfg())).rejects.toThrow(/не є git/);
+    await expect(start(input({ project: plain }), cfg())).rejects.toThrow(/не є git/);
   });
 });
 
@@ -274,7 +279,7 @@ ${extra}
   afterEach(() => { delete process.env.FAKE_AGY_SETTINGS; });
 
   it('lets agy write inside the project during the run and restores settings afterwards', async () => {
-    const r = await startTask(input({ agent: 'agy' }), agyCfg());
+    const r = await start(input({ agent: 'agy' }), agyCfg());
     expect(r.task.status).toBe('done'); // the fake could only write because the rule was in place
     expect(git('show', '--stat', '--format=', r.task.branch)).toContain('Footer.astro');
     expect(readFileSync(settings, 'utf8')).toBe(ORIGINAL);
@@ -289,15 +294,15 @@ agents:
 routing: { section: [agy] }
 permissions: { agy: { allow: [] } }
 `);
-    const r = await startTask(input({ agent: 'agy' }), cfg);
+    const r = await start(input({ agent: 'agy' }), cfg);
     expect(r.task.status).toBe('blocked');
-    expect(r.outcome.denied).toEqual(['write_file']);
+    expect(r.outcome!.denied).toEqual(['write_file']);
     expect(readFileSync(settings, 'utf8')).toBe(ORIGINAL);
   });
 
   it('restores the settings after a timeout', async () => {
     process.env.FAKE_AGENT_MODE = 'hang-agy';
-    const r = await startTask(input({ agent: 'agy', timeoutMin: 0.03 }), agyCfg());
+    const r = await start(input({ agent: 'agy', timeoutMin: 0.03 }), agyCfg());
     expect(r.task.status).toBe('failed');
     expect(readFileSync(settings, 'utf8')).toBe(ORIGINAL);
   }, 30_000);
@@ -306,7 +311,7 @@ permissions: { agy: { allow: [] } }
     const { mkdirSync } = await import('node:fs');
     mkdirSync(sbHome(), { recursive: true });
     writeFileSync(join(sbHome(), 'agy-rules-journal.json'), JSON.stringify({ settingsPath: settings, backupPath: '', originalExisted: true, permissionsExisted: false, writtenHash: 'x', added: { allow: [], deny: [] }, pid: process.ppid, project: '/other', startedAt: '' }));
-    await expect(startTask(input({ agent: 'agy' }), agyCfg())).rejects.toMatchObject({ exitCode: 3 });
+    await expect(start(input({ agent: 'agy' }), agyCfg())).rejects.toMatchObject({ exitCode: 3 });
     expect(git('branch', '--list', 'sb/*').split('\n').filter(Boolean).length).toBeLessThanOrEqual(1);
   });
 });
@@ -314,9 +319,9 @@ permissions: { agy: { allow: [] } }
 describe('protected paths', () => {
   it('marks a run that changed netlify.toml as blocked and never pushes it', async () => {
     process.env.FAKE_AGENT_MODE = 'protected';
-    const r = await startTask(input(), cfg('git: { pushBranches: true }'));
+    const r = await start(input(), cfg('git: { pushBranches: true }'));
     expect(r.task.status).toBe('blocked');
-    expect(r.run.reason).toContain('netlify.toml');
+    expect(r.run!.reason).toContain('netlify.toml');
     expect(r.warnings.join(' ')).not.toMatch(/push не вдався/); // push was skipped, not attempted
     expect(r.warnings.join(' ')).toMatch(/Захищені файли/);
   });

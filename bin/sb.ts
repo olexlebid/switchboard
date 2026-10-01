@@ -1,15 +1,17 @@
 #!/usr/bin/env -S npx tsx
-// Switchboard CLI. Stage 1 implements `status` and `hook`; the rest arrive in later stages.
+// Switchboard CLI: status, hook, init, run, resume, queue, unblock, dashboard.
 import { parseArgs } from 'node:util';
 import { renderStatus, renderSummary } from '../packages/core/format';
-import type { AgentId } from '../packages/core/types';
 import { installHook, uninstallHook } from '../packages/core/hook-install';
 import { loadConfig } from '../packages/core/config';
 import { runDashboard } from '../packages/core/dashboard';
-import { SbError, startTask } from '../packages/core/flow';
+import { resumeTask, SbError, startTask, type StartResult } from '../packages/core/flow';
 import { initProject } from '../packages/core/init';
+import { notify } from '../packages/core/notify';
 import { getOverview } from '../packages/core/overview';
-import { readState } from '../packages/core/store';
+import { clearExhausted, readState } from '../packages/core/store';
+import { formatDuration } from '../packages/core/time';
+import type { AgentId, Run, Task } from '../packages/core/types';
 
 const HELP = `Switchboard
 
@@ -21,10 +23,13 @@ const HELP = `Switchboard
   dashboard [--prod] [--port N]  дешборд на http://127.0.0.1:4321 (за замовчуванням dev з hot reload; --prod = збірка і запуск)
   init <проєкт>                створити RULES.md, DESIGN.md, CLAUDE.md, AGENTS.md, .sb/ (існуючі файли не чіпає)
   run "<задача>" --project <папка> [--type section] [--agent claude|agy] [--priority high]
-                               [--figma <url>] [--timeout <хв>]
-                               запустити задачу в гілці sb/<id>; main і деплой лишаються за тобою
-  queue                        список задач і їхні статуси
-  resume | (авто-передача між агентами)   (Етап 4)
+                               [--figma <url>] [--timeout <хв>] [--reviews <id задачі>] [--no-handoff]
+                               запустити задачу в гілці sb/<id>. Без --agent агента обирає роутер за
+                               лімітами; при ліміті задача передається іншому агентові. main і деплой за тобою.
+  queue [--run-due]            список задач; --run-due продовжує ті, що чекали скидання ліміту й уже можуть іти
+  resume <id> [--agent ...]    продовжити задачу, що чекає, заблокована або впала
+  unblock claude|agy           зняти позначку «ліміт вичерпано» (якщо вона хибна)
+  notify-test                  перевірити системне сповіщення (macOS)
 `;
 
 async function status(argv: string[]): Promise<number> {
@@ -42,6 +47,34 @@ async function status(argv: string[]): Promise<number> {
   return overview.agents.every((a) => !a.snapshot) ? 1 : 0;
 }
 
+function printResult(r: StartResult): number {
+  const t = r.task;
+  const secs = (run: Run) => Math.round((Date.parse(run.endedAt ?? run.startedAt) - Date.parse(run.startedAt)) / 1000);
+  const icons: Record<string, string> = { done: '✔ ГОТОВО', blocked: '■ ЗАБЛОКОВАНО (агенту не дозволено дію)', failed: '✖ ПОМИЛКА' };
+
+  let label: string;
+  if (t.status === 'waiting' && r.waiting) label = '⏸ ЧЕКАЄ (ліміт агентів)';
+  else if (t.status === 'waiting') label = '◐ НЕ ЗАВЕРШЕНО (агент: in-progress)';
+  else label = icons[r.run?.status ?? ''] ?? t.status;
+
+  console.log(`\n${label}  ${t.id}  (${r.runs.map((x) => `${x.agent} ${secs(x)} с`).join(' → ') || 'без запуску'})`);
+  for (const h of r.handoffs) {
+    const when = new Date(h.at).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+    console.log(`  передача: ${h.from} → ${h.to ?? '(нікому)'} о ${when}, причина: ${h.reason}`);
+  }
+  if (r.waiting) console.log(`  чекає до: ${new Date(r.waiting.until).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' })}  (${r.waiting.reason})\n  продовжити: pnpm sb resume ${t.id}`);
+  if (r.run?.reason && !r.waiting) console.log(`  причина: ${r.run.reason}`);
+  if (r.run?.summary) console.log(`  відповідь агента: ${r.run.summary.slice(0, 400).replace(/\n/g, ' ')}`);
+  if (r.progress.status) console.log(`  PROGRESS.md: Status: ${r.progress.status}${r.progress.openQuestions.length ? `; відкриті питання: ${r.progress.openQuestions.join(' | ')}` : ''}`);
+  console.log(`  гілка:   ${t.branch}   (проєкт повернуто на ${r.runs.length ? t.baseBranch : 'поточну гілку'})`);
+  console.log(`  файли:   ${r.files.length ? r.files.join(', ') : '—'}`);
+  if (r.run) console.log(`  лог:     ${r.run.logPath}`);
+  for (const w of r.warnings) console.log(`  ! ${w}`);
+  console.log(`\nПереглянь: git -C ${t.project} diff ${t.baseBranch}..${t.branch}`);
+  console.log('Мерж у main і деплой роби сам, Switchboard цього не робить.');
+  return t.status === 'done' ? 0 : t.status === 'blocked' || t.status === 'waiting' ? 4 : 1;
+}
+
 async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -49,6 +82,7 @@ async function run(argv: string[]): Promise<number> {
     options: {
       project: { type: 'string' }, type: { type: 'string' }, agent: { type: 'string' },
       priority: { type: 'string' }, figma: { type: 'string' }, timeout: { type: 'string' },
+      reviews: { type: 'string' }, 'no-handoff': { type: 'boolean' },
     },
   });
   const text = positionals.join(' ').trim();
@@ -59,7 +93,6 @@ async function run(argv: string[]): Promise<number> {
   if (values.agent && values.agent !== 'claude' && values.agent !== 'agy') throw new SbError('--agent: claude або agy', 2);
   if (values.priority && values.priority !== 'normal' && values.priority !== 'high') throw new SbError('--priority: normal або high', 2);
 
-  const cfg = loadConfig();
   const r = await startTask(
     {
       text,
@@ -69,35 +102,76 @@ async function run(argv: string[]): Promise<number> {
       priority: values.priority as 'normal' | 'high' | undefined,
       figma: values.figma,
       timeoutMin: values.timeout ? Number(values.timeout) : undefined,
+      reviews: values.reviews,
+      noHandoff: values['no-handoff'],
     },
-    cfg,
+    loadConfig(),
     (line) => console.log(line),
   );
-
-  const icon: Record<string, string> = { done: '✔ ГОТОВО', blocked: '■ ЗАБЛОКОВАНО (агенту не дозволено дію)', failed: '✖ ПОМИЛКА' };
-  const label = r.task.status === 'waiting' ? '◐ НЕ ЗАВЕРШЕНО (агент: in-progress)' : (icon[r.run.status] ?? r.run.status);
-  const secs = Math.round((Date.parse(r.run.endedAt ?? r.run.startedAt) - Date.parse(r.run.startedAt)) / 1000);
-  console.log(`\n${label}  ${r.task.id}  (${r.run.agent}, ${secs} с)`);
-  if (r.run.reason) console.log(`  причина: ${r.run.reason}`);
-  if (r.run.summary) console.log(`  відповідь агента: ${r.run.summary.slice(0, 400).replace(/\n/g, ' ')}`);
-  if (r.progress.status) console.log(`  PROGRESS.md: Status: ${r.progress.status}${r.progress.openQuestions.length ? `; відкриті питання: ${r.progress.openQuestions.join(' | ')}` : ''}`);
-  console.log(`  гілка:   ${r.task.branch}   (проєкт повернуто на ${r.task.baseBranch})`);
-  console.log(`  файли:   ${r.files.length ? r.files.join(', ') : '—'}`);
-  console.log(`  лог:     ${r.run.logPath}`);
-  for (const w of r.warnings) console.log(`  ! ${w}`);
-  console.log(`\nПереглянь: git -C ${r.task.project} diff ${r.task.baseBranch}..${r.task.branch}`);
-  console.log('Мерж у main і деплой роби сам, Switchboard цього не робить.');
-  return r.task.status === 'done' ? 0 : r.task.status === 'blocked' || r.task.status === 'waiting' ? 4 : 1;
+  return printResult(r);
 }
 
-function queue(): number {
+async function resume(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { agent: { type: 'string' }, timeout: { type: 'string' }, 'no-handoff': { type: 'boolean' } },
+  });
+  const id = positionals[0];
+  if (!id) {
+    console.error('Використання: sb resume <id задачі> [--agent claude|agy]');
+    return 2;
+  }
+  if (values.agent && values.agent !== 'claude' && values.agent !== 'agy') throw new SbError('--agent: claude або agy', 2);
+  const r = await resumeTask(id, loadConfig(), (line) => console.log(line), {}, {
+    agent: values.agent as AgentId | undefined,
+    timeoutMin: values.timeout ? Number(values.timeout) : undefined,
+    noHandoff: values['no-handoff'],
+  });
+  return printResult(r);
+}
+
+/** Tasks parked until a limit reset, soonest first. */
+function dueClock(t: Task): string {
+  if (!t.waitUntil) return '';
+  const left = Date.parse(t.waitUntil) - Date.now();
+  const when = new Date(t.waitUntil).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' });
+  return left > 0 ? `чекає до ${when} (через ${formatDuration(left)})` : `готова до продовження (з ${when})`;
+}
+
+async function queue(argv: string[]): Promise<number> {
+  const { values } = parseArgs({ args: argv, options: { 'run-due': { type: 'boolean' } } });
   const tasks = Object.values(readState().tasks).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  if (values['run-due']) {
+    const due = tasks.filter((t) => t.status === 'waiting' && t.waitUntil && Date.parse(t.waitUntil) <= Date.now());
+    if (due.length === 0) {
+      console.log('Немає задач, час очікування яких минув.');
+      return 0;
+    }
+    let code = 0;
+    for (const t of due) {
+      console.log(`\n=== продовжую ${t.id} ===`);
+      try {
+        code = Math.max(code, printResult(await resumeTask(t.id, loadConfig(), (line) => console.log(line))));
+      } catch (e) {
+        console.error(`  ${t.id}: ${(e as Error).message}`);
+        code = Math.max(code, e instanceof SbError ? e.exitCode : 1);
+      }
+    }
+    return code;
+  }
+
   if (tasks.length === 0) {
     console.log('Задач ще немає.');
     return 0;
   }
   for (const t of tasks) {
-    console.log(`${t.id}  ${t.status.padEnd(8)} ${t.type.padEnd(8)} ${(t.agent ?? '-').padEnd(6)} ${t.branch}\n    ${t.text.split('\n')[0]!.slice(0, 80)}${t.note ? `\n    ${t.note}` : ''}`);
+    console.log(`${t.id}  ${t.status.padEnd(8)} ${t.type.padEnd(8)} ${(t.agent ?? '-').padEnd(6)} ${t.branch}`);
+    console.log(`    ${t.text.split('\n')[0]!.slice(0, 80)}`);
+    if (t.status === 'waiting') console.log(`    ${dueClock(t)}`);
+    if (t.note) console.log(`    ${t.note}`);
+    for (const h of t.handoffs ?? []) console.log(`    ↪ ${h.from} → ${h.to ?? '(нікому)'}: ${h.reason}`);
   }
   return 0;
 }
@@ -128,7 +202,24 @@ async function main(): Promise<number> {
     case 'run':
       return run(rest);
     case 'queue':
-      return queue();
+      return queue(rest);
+    case 'resume':
+      return resume(rest);
+    case 'notify-test': {
+      const ok = await notify('Switchboard', 'Тест сповіщення: якщо ти це бачиш, паузи задач нагадуватимуть про себе.');
+      console.log(ok ? 'Сповіщення надіслано.' : 'Не вдалося надіслати сповіщення (працює лише на macOS через osascript).');
+      return ok ? 0 : 1;
+    }
+    case 'unblock': {
+      const agent = rest[0];
+      if (agent !== 'claude' && agent !== 'agy') {
+        console.error('Використання: sb unblock claude|agy  (знімає позначку «ліміт вичерпано», якщо вона хибна)');
+        return 2;
+      }
+      clearExhausted(agent);
+      console.log(`Позначку про вичерпаний ліміт для ${agent} знято.`);
+      return 0;
+    }
     case 'init': {
       const project = rest[0];
       if (!project) {
@@ -143,9 +234,6 @@ async function main(): Promise<number> {
       console.log('Потім закоміть ці файли: `sb run` не стартує, поки робоче дерево не чисте.');
       return 0;
     }
-    case 'resume':
-      console.error(`"sb ${cmd}" ще не реалізовано (див. етапи в README).`);
-      return 2;
     default:
       console.error(`Невідома команда: ${cmd}\n${HELP}`);
       return 2;

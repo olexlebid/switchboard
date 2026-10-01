@@ -6,6 +6,9 @@
 //   denied   writes nothing, reports a denied Write
 //   hang     never finishes (also spawns a child shell to test process-group kill)
 //   error    prints to stderr and exits 1
+//   limit    writes partial work, then fails with a usage-limit message (reset time from FAKE_RESET_AT)
+//   echo-fail fails for an unrelated reason but echoes the task line (which may mention quota)
+// FAKE_PROMPT_DUMP=<file> appends every received prompt to that file.
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -15,6 +18,7 @@ const prompt = args[0] === '-p' ? args[1] ?? '' : '';
 const mode = process.env.FAKE_AGENT_MODE ?? 'success';
 const style = process.env.FAKE_AGENT_STYLE ?? 'claude';
 const taskId = /Task id: (t-[\w-]+)/.exec(prompt)?.[1] ?? 'unknown';
+if (process.env.FAKE_PROMPT_DUMP) appendFileSync(process.env.FAKE_PROMPT_DUMP, `=== ${style}\n${prompt}\n`);
 
 function report({ ok = true, denied = [], text = 'done' }) {
   if (style === 'agy') {
@@ -63,7 +67,7 @@ switch (mode) {
     console.log('working... api key sk-abcdefgh12345678 should never reach the log');
     writeWork();
     writeProgress();
-    report({ text: 'Created Footer.astro', denied: [...new Set(denied)] });
+    report({ text: `Created Footer.astro. (${prompt.split('\n').find((l) => /quota|rate limit/i.test(l)) ?? 'ok'})`, denied: [...new Set(denied)] });
     break;
   case 'protected':
     writeWork();
@@ -71,6 +75,24 @@ switch (mode) {
     writeFileSync('netlify.toml', '[build]\n');
     report({ text: 'Also touched netlify.toml' });
     break;
+  case 'limit': {
+    writeWork();
+    const reset = process.env.FAKE_RESET_AT ?? new Date(Date.now() + 2 * 3600_000).toISOString();
+    if (style === 'agy') {
+      console.log(JSON.stringify({ conversation_id: 'fake', status: 'ERROR', response: '', error: `RESOURCE_EXHAUSTED: quota exceeded. Resets at ${reset}`, denied_actions: [] }));
+      console.error(`Error: RESOURCE_EXHAUSTED (429) resets at ${reset}`);
+    } else {
+      console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: `Claude AI usage limit reached|${Math.floor(Date.parse(reset) / 1000)}`, permission_denials: [] }));
+    }
+    process.exit(1);
+    break;
+  }
+  case 'echo-fail': {
+    const line = prompt.split('\n').find((l) => /quota|rate limit/i.test(l)) ?? prompt.split('\n').pop();
+    console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: `Cannot continue. Task says: ${line}`, permission_denials: [] }));
+    process.exit(1);
+    break;
+  }
   case 'hang-agy':
     writeWork();
     setTimeout(() => {}, 60_000);

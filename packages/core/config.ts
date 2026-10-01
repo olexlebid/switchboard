@@ -7,6 +7,12 @@ import type { AgentConfig, AgentId, SwitchboardConfig } from './types';
 
 const AGENT_IDS: AgentId[] = ['claude', 'agy'];
 
+/** Regex sources (case-insensitive) searched in the LAST lines of an agent's output. */
+export const DEFAULT_LIMIT_PATTERNS = [
+  'usage limit', 'rate limit', 'quota', '\\b429\\b', 'resets? at', 'limit reached',
+  'hit your .{0,20}limit', 'RESOURCE_EXHAUSTED', 'too many requests', 'limit will reset',
+];
+
 /**
  * Config lookup order: SB_CONFIG, then walking up from the working directory (works for the
  * bundled dashboard server, where import.meta.url no longer points into the repo), then the
@@ -105,6 +111,13 @@ export function parseConfig(text: string): SwitchboardConfig {
       protectedPaths: strArray(raw.git?.protectedPaths, 'git.protectedPaths', ['netlify.toml', '.env*']),
     },
     permissions,
+    router: { shortTypes: strArray(raw.router?.shortTypes, 'router.shortTypes', ['section', 'copy', 'qa']) },
+    limitDetection: {
+      tailLines: num(raw.limitDetection?.tailLines, 'limitDetection.tailLines', 15),
+      patterns: strArray(raw.limitDetection?.patterns, 'limitDetection.patterns', DEFAULT_LIMIT_PATTERNS),
+    },
+    handoff: { maxHandoffs: num(raw.handoff?.maxHandoffs, 'handoff.maxHandoffs', 2) },
+    notifications: { enabled: raw.notifications?.enabled !== false },
   };
 }
 

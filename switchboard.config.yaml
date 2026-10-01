@@ -92,3 +92,29 @@ permissions:
       - "write_file({project}/.env)"
       - "write_file({project}/netlify.toml)"
     args: []
+
+router:
+  shortTypes: [section, copy, qa]     # an agent with status "мало" only takes these
+
+# A run counts as "hit a usage limit" only when it FAILED and one of these regexes matches the LAST
+# lines of its output (so a task text that merely mentions "quota" never triggers a handover).
+# Add new wording here when you see a real limit message.
+limitDetection:
+  tailLines: 15
+  patterns:
+    - "usage limit"
+    - "rate limit"
+    - "quota"
+    - "\\b429\\b"
+    - "resets? at"
+    - "limit reached"
+    - "hit your .{0,20}limit"
+    - "RESOURCE_EXHAUSTED"
+    - "too many requests"
+    - "limit will reset"
+
+handoff:
+  maxHandoffs: 2          # after this many handovers the task pauses and you are notified
+
+notifications:
+  enabled: true           # macOS system notification on pause (osascript)

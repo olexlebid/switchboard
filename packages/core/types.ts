@@ -80,7 +80,15 @@ export type Task = {
   updatedAt: string;
   /** Short human-readable note about the last outcome. */
   note?: string;
+  /** Set while the task waits for a limit reset (status "waiting"): earliest time to resume. */
+  waitUntil?: string;
+  /** Agent handovers so far, oldest first. */
+  handoffs?: Handoff[];
+  /** review tasks: id of the task whose code is reviewed (the reviewer must be another agent). */
+  reviews?: string;
 };
+
+export type Handoff = { from: AgentId; to?: AgentId; at: string; reason: string };
 
 export type Run = {
   id: string;
@@ -109,4 +117,8 @@ export type SwitchboardConfig = {
   git: { pushBranches: boolean; protectedPaths: string[] };
   /** Per-agent permission rules and extra CLI args used for headless runs. */
   permissions: Record<AgentId, PermissionRules & { args: string[] }>;
+  router: { shortTypes: string[] };
+  limitDetection: { tailLines: number; patterns: string[] };
+  handoff: { maxHandoffs: number };
+  notifications: { enabled: boolean };
 };
