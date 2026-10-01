@@ -12,6 +12,7 @@
 #   scripts/recon.sh round2     # follow-up probes (agy rules file, permissions, config dirs)
 #   scripts/recon.sh round3     # agy headless permission mechanisms (10 small requests)
 #   scripts/recon.sh round4     # agy user-level permissions.allow + workspace trust (temporarily edits, then restores, agy settings)
+#   scripts/recon.sh round5     # agy rule scoping (path patterns, command patterns, deny precedence); same temporary edit + restore
 #
 # Compatible with bash 3.2 (macOS) and GNU bash.
 
@@ -260,8 +261,9 @@ fi
 # Tests whether a user-level permissions.allow rule and/or a trusted workspace lets `agy -p`
 # write files. It TEMPORARILY edits ~/.gemini/antigravity-cli/settings.json: the original is
 # backed up first and restored (and verified byte-for-byte) when the script ends, even on Ctrl+C.
-if [ "${1:-}" = "round4" ]; then
-  REPORT="$START_DIR/sb-recon-round4-$STAMP.txt"
+if [ "${1:-}" = "round4" ] || [ "${1:-}" = "round5" ]; then
+  ROUND="$1"
+  REPORT="$START_DIR/sb-recon-$ROUND-$STAMP.txt"
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/sb-recon4.XXXXXX")"
   SETTINGS="$HOME/.gemini/antigravity-cli/settings.json"
   BACKUP="$SETTINGS.sb-backup-$STAMP"
@@ -284,7 +286,7 @@ if [ "${1:-}" = "round4" ]; then
   trap finalize EXIT
   trap 'exit 130' INT TERM
 
-  say "Switchboard recon round 4 (agy user-level permissions and workspace trust) $STAMP"
+  say "Switchboard recon $ROUND (agy user-level permissions) $STAMP"
   command -v agy >/dev/null 2>&1 || { say "agy not installed"; echo "Done. Review and send: $REPORT"; exit 0; }
   [ -f "$SETTINGS" ] || { say "No $SETTINGS: nothing to test"; echo "Done. Review and send: $REPORT"; exit 0; }
   cp -p "$SETTINGS" "$BACKUP"
@@ -299,12 +301,17 @@ if [ "${1:-}" = "round4" ]; then
 
   # apply_settings <allow-json-array|""> <trust-dir|"">: start from the original, merge, write.
   apply_settings() {
-    ALLOW="$1" TRUST="$2" ORIG="$BACKUP" OUT="$SETTINGS" node -e '
+    ALLOW="$1" TRUST="$2" PERMS="${PERMS:-}" ORIG="$BACKUP" OUT="$SETTINGS" node -e '
       const fs = require("fs");
       const j = JSON.parse(fs.readFileSync(process.env.ORIG, "utf8"));
       if (process.env.ALLOW) {
         j.permissions = j.permissions || {};
         j.permissions.allow = [...(j.permissions.allow || []), ...JSON.parse(process.env.ALLOW)];
+      }
+      if (process.env.PERMS) {
+        const p = JSON.parse(process.env.PERMS);
+        j.permissions = j.permissions || {};
+        for (const k of Object.keys(p)) j.permissions[k] = [...(j.permissions[k] || []), ...p[k]];
       }
       if (process.env.TRUST) {
         const t = Array.isArray(j.trustedWorkspaces) ? j.trustedWorkspaces : [];
@@ -330,21 +337,53 @@ if [ "${1:-}" = "round4" ]; then
     cd "$START_DIR" || return
   }
 
-  head_ "Q1. Which action name does a shell command use? (untrusted, no rules)"
-  probe shell_baseline "$SHELL_PROMPT" "" no
+  if [ "$ROUND" = "round4" ]; then
+    head_ "Q1. Which action name does a shell command use? (untrusted, no rules)"
+    probe shell_baseline "$SHELL_PROMPT" "" no
 
-  head_ "Q2. Workspace trust and rules, write only"
-  probe trust_only "$WRITE_PROMPT" "" yes
-  probe trust_accept_edits "$WRITE_PROMPT" "" yes --mode accept-edits
-  probe allow_untrusted "$WRITE_PROMPT" '["write_file(*)"]' no
-  probe allow_trusted "$WRITE_PROMPT" '["write_file(*)"]' yes
-  probe allow_bare_trusted "$WRITE_PROMPT" '["write_file"]' yes
+    head_ "Q2. Workspace trust and rules, write only"
+    probe trust_only "$WRITE_PROMPT" "" yes
+    probe trust_accept_edits "$WRITE_PROMPT" "" yes --mode accept-edits
+    probe allow_untrusted "$WRITE_PROMPT" '["write_file(*)"]' no
+    probe allow_trusted "$WRITE_PROMPT" '["write_file(*)"]' yes
+    probe allow_bare_trusted "$WRITE_PROMPT" '["write_file"]' yes
 
-  head_ "Q3. Shell command with a rule (action name taken from Q1)"
-  SHELL_ACTION="$(grep -o '"action":"[^"]*"' "$WORK/shell_baseline.out" | head -1 | cut -d'"' -f4)"
-  say "shell action name from Q1: ${SHELL_ACTION:-unknown}"
-  if [ -n "$SHELL_ACTION" ]; then
-    probe shell_allow_trusted "$SHELL_PROMPT" "[\"${SHELL_ACTION}(*)\"]" yes
+    head_ "Q3. Shell command with a rule (action name taken from Q1)"
+    SHELL_ACTION="$(grep -o '"action":"[^"]*"' "$WORK/shell_baseline.out" | head -1 | cut -d'"' -f4)"
+    say "shell action name from Q1: ${SHELL_ACTION:-unknown}"
+    if [ -n "$SHELL_ACTION" ]; then
+      probe shell_allow_trusted "$SHELL_PROMPT" "[\"${SHELL_ACTION}(*)\"]" yes
+    fi
+
+  else
+    # ---- round 5: how far can the rules be narrowed?
+    # Layout: $WORK/proj is the "project" (agy runs with it as cwd), $WORK/other is outside it.
+    PROJ="$WORK/proj"; OTHER="$WORK/other"; mkdir -p "$PROJ/sub" "$OTHER"; PROJ="$(cd "$PROJ" && pwd -P)"; OTHER="$(cd "$OTHER" && pwd -P)"
+    # probe5 <label> <perms-json> <prompt> <files-to-check...>
+    probe5() {
+      local label=$1 perms=$2 prompt=$3; shift 3
+      cd "$PROJ" || return
+      rm -f "$PROJ"/hello.txt "$PROJ"/shell.txt "$PROJ"/sub/nested.txt "$OTHER"/outside.txt
+      echo keep >"$PROJ/victim.txt"
+      PERMS="$perms" apply_settings "" ""
+      run_to 150 "$WORK/$label.out" agy -p "$prompt" --output-format json --print-timeout 120s
+      local denied res=""
+      denied="$(grep -o '"denied_actions":\[[^]]*\]' "$WORK/$label.out" | head -1 | cut -c1-200)"
+      for f in "$@"; do res="$res $(basename "$f"): $([ -f "$f" ] && echo present || echo absent);"; done
+      say "[$label] perms=$perms ->$res | ${denied:-no denied_actions}"
+      cd "$START_DIR" || return
+    }
+
+    head_ "S1. Path-scoped write rules (project = $PROJ)"
+    probe5 scope_star_inside "{\"allow\":[\"write_file($PROJ/*)\"]}" "Create the file $PROJ/hello.txt containing hi. Reply briefly." "$PROJ/hello.txt"
+    probe5 scope_star_outside "{\"allow\":[\"write_file($PROJ/*)\"]}" "Create the file $OTHER/outside.txt containing hi. Reply briefly." "$OTHER/outside.txt"
+    probe5 scope_star_nested "{\"allow\":[\"write_file($PROJ/*)\"]}" "Create the file $PROJ/sub/nested.txt containing hi. Reply briefly." "$PROJ/sub/nested.txt"
+    probe5 scope_dstar_nested "{\"allow\":[\"write_file($PROJ/**)\"]}" "Create the file $PROJ/sub/nested.txt containing hi. Reply briefly." "$PROJ/sub/nested.txt"
+
+    head_ "S2. Shell command patterns and deny precedence"
+    probe5 cmd_echo_only_allowed "{\"allow\":[\"command(echo *)\"]}" "Run exactly this shell command: echo SB_SHELL_OK > $PROJ/shell.txt . Reply briefly." "$PROJ/shell.txt"
+    probe5 cmd_echo_only_rm "{\"allow\":[\"command(echo *)\"]}" "Run exactly this shell command: rm $PROJ/victim.txt . Reply briefly." "$PROJ/victim.txt"
+    probe5 cmd_deny_rm "{\"allow\":[\"command(*)\"],\"deny\":[\"command(rm *)\"]}" "Run exactly this shell command: rm $PROJ/victim.txt . Reply briefly." "$PROJ/victim.txt"
   fi
 
   say ""
