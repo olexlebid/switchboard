@@ -208,8 +208,19 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
 
   const authors = reviewAuthors(task);
 
+  /** Leaves the project on the branch it was on before, with the task branch intact. Safe to call twice. */
+  const restoreBranch = async () => {
+    try {
+      if ((await currentBranch(project)) !== returnTo) await switchBack(project, returnTo);
+    } catch (e) {
+      warnings.push(`не вдалося повернутися на ${returnTo}: ${(e as Error).message}`);
+    }
+  };
+
   /** Puts the task in the queue until `until` and tells the user. */
   const park = async (until: string, reason: string) => {
+    // Switch back first so a "waiting" task never shows up while the repo still sits on the task branch.
+    await restoreBranch();
     task.status = 'waiting';
     task.waitUntil = until;
     task.note = reason;
@@ -347,6 +358,9 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
         }
       }
 
+      // Back on the original branch BEFORE the final status is saved: a "done" task must never be visible
+      // (dashboard, `sb queue`) while the project is still checked out on the task branch.
+      await restoreBranch();
       task.status = touchedProtected.length > 0 ? 'blocked' : agentUnfinished ? 'waiting' : status === 'done' ? 'done' : status === 'blocked' ? 'blocked' : 'failed';
       task.note = oneLine(run.reason ?? run.summary ?? '', 200) || undefined;
       task.openQuestions = lastProgress.openQuestions.length ? lastProgress.openQuestions.slice(0, 10) : undefined;
@@ -367,12 +381,8 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
     task.pid = undefined;
     saveTask(task);
     unregisterInterrupt();
-    // Leave the project on the branch it was on before, with the task branch intact.
-    try {
-      if ((await currentBranch(project)) !== returnTo) await switchBack(project, returnTo);
-    } catch (e) {
-      warnings.push(`не вдалося повернутися на ${returnTo}: ${(e as Error).message}`);
-    }
+    // Safety net for the failure paths (a no-op when the branch was already restored above).
+    await restoreBranch();
   }
 }
 

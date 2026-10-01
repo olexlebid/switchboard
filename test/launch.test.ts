@@ -154,10 +154,8 @@ describe('launching real sb processes from the dashboard code', () => {
     expect(id).toMatch(/^t-/);
     await waitFor(() => readState().tasks[id!]?.status === 'done');
     expect(execFileSync('git', ['branch', '--list', 'sb/*'], { cwd: project, encoding: 'utf8' })).toContain(`sb/${id}`);
-    // the task is marked done slightly before the process switches the project back, so wait for it
-    const head = () => execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim();
-    await waitFor(() => head() === 'main');
-    expect(head()).toBe('main');
+    // regression: "done" must only become visible after the project is back on its original branch
+    expect(execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim()).toBe('main');
   }, 60_000);
 
   it('reports an immediate failure (dirty working tree) instead of pretending it started', async () => {
