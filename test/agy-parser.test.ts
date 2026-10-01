@@ -16,6 +16,28 @@ describe('parseAgyQuota', () => {
     expect(g[0]?.usedPct).toBe(0.36);
   });
 
+  it('accepts tab-separated columns, CRLF line endings and ANSI colors (real output differs from the screenshot)', () => {
+    const tabbed = [
+      'Quota:',
+      'Gemini Models\tWeekly Limit Remaining\t100%\t2026-10-08T05:45:23Z',
+      'Gemini Models\tFive Hour Limit Remaining\t99.64%\t2026-10-01T10:45:23Z',
+      'Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-10-01T10:57:03Z',
+    ].join('\r\n');
+    const g = parseAgyQuota(tabbed);
+    expect(g.map((x) => [x.group, x.window, x.usedPct])).toEqual([
+      ['Gemini Models', 'weekly', 0],
+      ['Gemini Models', 'fiveHour', 0.36],
+      ['Claude and GPT models', 'fiveHour', 0],
+    ]);
+    expect(parseAgyQuota('\x1b[32mGemini Models Weekly Limit Remaining 50% 2026-10-08T05:45:23Z\x1b[0m')[0]?.usedPct).toBe(50);
+  });
+
+  it('accepts single-space separation (what the failed run printed)', () => {
+    const g = parseAgyQuota('Gemini Models Weekly Limit Remaining 100% 2026-10-08T05:45:23Z\nGemini Models Five Hour Limit Remaining 100% 2026-10-01T10:45:23Z');
+    expect(g).toHaveLength(2);
+    expect(g[0]?.group).toBe('Gemini Models');
+  });
+
   it('throws when nothing matches', () => {
     expect(() => parseAgyQuota('Quota:\n(nothing)')).toThrow(UsageParseError);
   });

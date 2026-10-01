@@ -13,6 +13,11 @@ import type { AgentConfig, GroupWindow, UsageSnapshot, UsageWindow } from '../ty
 
 export class UsageParseError extends Error {}
 
+/** Removes terminal color/cursor escape codes that some CLIs print even when piped. */
+export function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+}
+
 /** First chars of unexpected CLI output, single line, so a parse failure is debuggable. */
 export function snippet(text: string, max = 120): string {
   const one = maskSecrets(text.replace(/\s+/g, ' ').trim());
@@ -74,7 +79,7 @@ export type ParsedClaudeUsage = {
 
 export function parseClaudeUsage(text: string, now = new Date()): ParsedClaudeUsage {
   const out: ParsedClaudeUsage = { perGroup: [] };
-  for (const m of text.matchAll(LINE_RE)) {
+  for (const m of stripAnsi(text).matchAll(LINE_RE)) {
     const kind = m[1]!.toLowerCase();
     const qualifier = m[2]?.trim().toLowerCase();
     const usedPct = Number(m[3]);

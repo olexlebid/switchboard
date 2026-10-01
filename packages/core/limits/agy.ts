@@ -1,20 +1,20 @@
 // Antigravity (agy) usage: parses the text printed by `agy -p "/quota"`.
-// Sample (recon row 16), columns separated by 2+ spaces:
+// Sample (recon row 16); columns may be separated by spaces OR a single tab:
 //   Gemini Models           Weekly Limit Remaining     100%  2026-10-08T05:45:23Z
 //   Claude and GPT models   Five Hour Limit Remaining  100%  2026-10-01T10:57:03Z
 import { tmpdir } from 'node:os';
 import { runCommand } from '../exec';
 import type { AgentConfig, GroupWindow, UsageSnapshot, UsageWindow } from '../types';
-import { snippet, UsageParseError } from './claude';
+import { snippet, stripAnsi, UsageParseError } from './claude';
 
 const LINE_RE =
-  /^\s*(.+?)\s{2,}(Weekly|Five\s+Hour)\s+Limit\s+Remaining\s+(\d+(?:\.\d+)?)\s*%\s+(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s*$/gim;
+  /^\s*(.+?)\s+(Weekly|Five\s+Hour)\s+Limit\s+Remaining\s+(\d+(?:\.\d+)?)\s*%\s+(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s*$/gim;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export function parseAgyQuota(text: string): GroupWindow[] {
   const groups: GroupWindow[] = [];
-  for (const m of text.matchAll(LINE_RE)) {
+  for (const m of stripAnsi(text).matchAll(LINE_RE)) {
     const remaining = Number(m[3]);
     groups.push({
       group: m[1]!.trim(),
