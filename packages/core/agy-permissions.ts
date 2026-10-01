@@ -15,6 +15,8 @@ import { onExit } from './cleanup';
 import { sbHome, writeJsonAtomic } from './store';
 
 export class AgyPermissionError extends Error {}
+/** Another agy run holds the shared settings file; waiting for it is safe. */
+export class AgyBusyError extends AgyPermissionError {}
 
 type Journal = {
   settingsPath: string;
@@ -110,7 +112,7 @@ export function recoverAgyRules(): string | undefined {
   if (!existsSync(journalPath())) return undefined;
   const j = JSON.parse(readFileSync(journalPath(), 'utf8')) as Journal;
   if (j.pid !== process.pid && processAlive(j.pid)) {
-    throw new AgyPermissionError(`Інший запуск agy ще триває (pid ${j.pid}, проєкт ${j.project}). Дочекайся його завершення.`);
+    throw new AgyBusyError(`Інший запуск agy ще триває (pid ${j.pid}, проєкт ${j.project}). Дочекайся його завершення.`);
   }
   const how = restoreFromJournal(j);
   rmSync(journalPath(), { force: true });

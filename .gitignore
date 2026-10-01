@@ -7,3 +7,4 @@ dist/
 sb-recon-*.txt
 .switchboard/
 *.log
+.DS_Store

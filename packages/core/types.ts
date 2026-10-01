@@ -140,6 +140,8 @@ export type Chat = {
   /** Agent-side conversation ids, so each agent continues its own session. */
   sessions: Partial<Record<AgentId, string>>;
   lastAgent?: AgentId;
+  /** Model chosen per agent for this chat (`--model`); empty = the agent's own default. */
+  models?: Partial<Record<AgentId, string>>;
   messages: ChatMessage[];
   status: 'idle' | 'running' | 'waiting';
   /** pid of the `sb chat-turn` process while a turn runs. */
@@ -149,6 +151,9 @@ export type Chat = {
   createdAt: string;
   updatedAt: string;
 };
+
+/** A model an agent can be told to use (`--model <id>`). */
+export type ModelOption = { id: string; label: string };
 
 export type PermissionRules = { allow: string[]; deny: string[] };
 

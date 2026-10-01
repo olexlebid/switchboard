@@ -1,11 +1,28 @@
-// What the dashboard shows about chats: the project's chat list and the active conversation.
+// What the dashboard shows about chats: every chat (all projects) as a tab/list item and the selected conversation.
 import { basename } from 'node:path';
 import { renderMarkdown } from './markdown';
 import { AGENT_TITLES } from './overview';
 import { readState, updateChat, updateState } from './store';
 import type { AgentId, Chat } from './types';
 
-export type ChatListItem = { id: string; title: string; updatedAt: string; turns: number };
+export type ChatListItem = {
+  id: string;
+  title: string;
+  project: string;
+  projectName: string;
+  status: Chat['status'];
+  mode: 'auto' | AgentId;
+  lastAgent?: AgentId;
+  /** Display name of the agent that answered last (or the fixed one); absent in "auto" before the first reply. */
+  agentTitle?: string;
+  updatedAt: string;
+  turns: number;
+  /** Start of the running turn (elapsed time in the activity list). */
+  runningSince?: string;
+  waitUntil?: string;
+  /** First line of the latest agent reply, for the "recent" list. */
+  lastReply?: string;
+};
 
 export type ChatMessageView = {
   id: string;
@@ -36,11 +53,13 @@ export type ChatView = {
   /** Start of the running turn (the UI shows the elapsed time from here). */
   runningSince?: string;
   lastAgent?: AgentId;
+  /** Model chosen per agent in this chat (absent = the agent's default). */
+  models: Partial<Record<AgentId, string>>;
   canStop: boolean;
   messages: ChatMessageView[];
 };
 
-export type ChatOverview = { project: string; chats: ChatListItem[]; active?: ChatView };
+export type ChatOverview = { chats: ChatListItem[]; active?: ChatView };
 
 function processAlive(pid: number): boolean {
   try {
@@ -77,6 +96,7 @@ function viewOf(chat: Chat): ChatView {
     waitUntil: chat.waitUntil,
     runningSince: running ? runningMessage?.at : undefined,
     lastAgent: chat.lastAgent,
+    models: chat.models ?? {},
     canStop: running && Boolean(chat.pid),
     messages: chat.messages.map((m) => ({
       id: m.id,
@@ -93,20 +113,35 @@ function viewOf(chat: Chat): ChatView {
   };
 }
 
-export function getChatOverview(project: string | undefined): ChatOverview | undefined {
-  if (!project) return undefined;
-  for (const c of Object.values(readState().chats)) if (c.project === project) reconcile(c);
-  const state = readState();
-  const chats = Object.values(state.chats)
-    .filter((c) => c.project === project)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const activeId = state.activeChats[project];
-  const active = (activeId && state.chats[activeId]) || chats[0];
+const firstLine = (text: string): string => text.replace(/\s+/g, ' ').trim().slice(0, 120);
+
+function itemOf(c: Chat): ChatListItem {
+  const running = c.status === 'running';
+  const lastAgentMessage = [...c.messages].reverse().find((m) => m.role === 'agent');
+  const agent = c.lastAgent ?? (c.mode === 'auto' ? undefined : c.mode);
   return {
-    project,
-    chats: chats.map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, turns: c.turns })),
-    active: active ? viewOf(active) : undefined,
+    id: c.id,
+    title: c.title,
+    project: c.project,
+    projectName: basename(c.project),
+    status: c.status,
+    mode: c.mode,
+    lastAgent: c.lastAgent,
+    agentTitle: agent ? AGENT_TITLES[agent] : undefined,
+    updatedAt: c.updatedAt,
+    turns: c.turns,
+    runningSince: running ? c.messages.find((m) => m.role === 'user' && m.status === 'running')?.at : undefined,
+    waitUntil: c.waitUntil,
+    lastReply: lastAgentMessage ? firstLine(lastAgentMessage.text) : undefined,
   };
+}
+
+/** All chats, newest first, and the conversation of `chatId` (default: the most recently updated chat). */
+export function getChatOverview(chatId?: string): ChatOverview {
+  for (const c of Object.values(readState().chats)) reconcile(c);
+  const chats = Object.values(readState().chats).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const active = (chatId && chats.find((c) => c.id === chatId)) || chats[0];
+  return { chats: chats.slice(0, 60).map(itemOf), active: active ? viewOf(active) : undefined };
 }
 
 /** Makes `chatId` the chat shown for its project. */

@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig } from '../packages/core/config';
 import { getChatOverview, selectChat } from '../packages/core/chat-overview';
-import { isSbProcess, launchTask, mergeFor, newChatFromDashboard, previewMergeFor, resumeFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, stashProjectChanges, stopChat, stopTask, validateLaunch } from '../packages/core/launch';
+import { isSbProcess, launchTask, mergeFor, newChatFromDashboard, previewMergeFor, setChatModelFromDashboard, resumeFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, stashProjectChanges, stopChat, stopTask, validateLaunch } from '../packages/core/launch';
 import { renderMarkdown } from '../packages/core/markdown';
 import { addProject, readState, saveRun, saveTask } from '../packages/core/store';
 import { allowedProjects, getTasksOverview, matchAllowedProject, tailFile } from '../packages/core/task-overview';
@@ -251,6 +251,18 @@ describe('a dirty working tree is resolved from the dashboard', () => {
     expect(readFileSync(join(project, 'README.md'), 'utf8')).toBe('# changed\n');
   });
 
+  it('never commits .DS_Store, and a run that left only .DS_Store behind makes no commit', async () => {
+    const { commitAll } = await import('../packages/core/git');
+    process.env.SB_CONFIG = writeConfig('success');
+    writeFileSync(join(project, '.DS_Store'), 'x');
+    expect(await commitAll(project, 'only noise')).toBeUndefined();
+    expect(git('log', '--oneline').split('\n')).toHaveLength(1);
+    writeFileSync(join(project, 'About.astro'), '<h2>x</h2>\n');
+    expect(await commitAll(project, 'real work')).toBeDefined();
+    expect(git('show', '--name-only', '--format=', 'HEAD')).toBe('About.astro');
+    expect(existsSync(join(project, '.DS_Store'))).toBe(true);
+  });
+
   it('untracked .DS_Store files never block, and are left alone by the stash', async () => {
     process.env.SB_CONFIG = writeConfig('success');
     writeFileSync(join(project, '.DS_Store'), 'x');
@@ -444,7 +456,7 @@ describe('chat from the dashboard code', () => {
     const sent = await sendChatMessage(cfg, chatId, 'Зроби **футер**', [{ name: 'brief.txt', data: Buffer.from('color #123456') }]);
     expect(sent.ok).toBe(true);
     await waitFor(() => (readState().chats[chatId]?.messages.filter((m) => m.role === 'agent').length ?? 0) === 1);
-    const overview = getChatOverview(project)!;
+    const overview = getChatOverview(chatId);
     expect(overview.active!.id).toBe(chatId);
     expect(overview.active!.status).toBe('idle');
     const reply = overview.active!.messages.find((m) => m.role === 'agent')!;
@@ -462,8 +474,11 @@ describe('chat from the dashboard code', () => {
     // a second chat can be selected and the list holds both
     const other = await newChatFromDashboard(cfg, project, 'claude');
     expect(selectChat(chatId)).toBe(true);
-    expect(getChatOverview(project)!.chats).toHaveLength(2);
-    expect(getChatOverview(project)!.active!.id).toBe(chatId);
+    expect(getChatOverview(chatId).chats).toHaveLength(2);
+    expect(getChatOverview(chatId).active!.id).toBe(chatId);
+    expect(getChatOverview(chatId).chats.every((c) => c.projectName === 'site')).toBe(true);
+    // without an id the most recently updated chat is shown
+    expect(getChatOverview().active!.id).toBe(other.ok ? other.chatId : '');
     expect(other.ok).toBe(true);
     expect(execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim()).toBe('main');
   }, 90_000);
@@ -487,7 +502,7 @@ describe('chat from the dashboard code', () => {
     expect((await sendChatMessage(cfg, chatId, 'щось довге')).ok).toBe(true);
     await waitFor(() => readState().chats[chatId]?.status === 'running' && !!readState().chats[chatId]?.pid);
     expect((await sendChatMessage(cfg, chatId, 'ще')).ok).toBe(false); // busy
-    expect(getChatOverview(project)!.active!.canStop).toBe(true);
+    expect(getChatOverview(chatId).active!.canStop).toBe(true);
     expect(stopChat(chatId).ok).toBe(true);
     await waitFor(() => readState().chats[chatId]?.status === 'idle');
     const messages = readState().chats[chatId]!.messages;
@@ -495,13 +510,39 @@ describe('chat from the dashboard code', () => {
     expect(messages.at(-1)!.text).toMatch(/Зупинено/);
   }, 60_000);
 
+  it('lists chats of every project, so parallel work in other projects shows up', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    const other = makeRepo('other-site');
+    const cfg = parseConfig(`agents: { claude: { cmd: c }, agy: { cmd: a } }\ndashboard: { projects: ["${project}", "${other}"] }`);
+    const a = (await newChatFromDashboard(cfg, project, 'auto') as { chatId?: string }).chatId!;
+    const b = (await newChatFromDashboard(cfg, other, 'claude') as { chatId?: string }).chatId!;
+    const { updateChat } = await import('../packages/core/store');
+    updateChat(b, (c) => { c.status = 'running'; c.pid = process.pid; c.messages.push({ id: 'm1', role: 'user', text: 'зроби', at: new Date().toISOString(), status: 'running' }); });
+    const o = getChatOverview(a);
+    expect(o.active!.id).toBe(a);
+    expect(o.chats.map((c) => [c.projectName, c.status]).sort()).toEqual([['other-site', 'running'], ['site', 'idle']]);
+    expect(o.chats.find((c) => c.id === b)).toMatchObject({ agentTitle: 'Claude Code', runningSince: expect.any(String) });
+  });
+
+  it('picks a model per agent: only known models, and an empty value clears it', async () => {
+    process.env.SB_CONFIG = writeConfig('success');
+    const cfg = await load();
+    const chatId = (await newChatFromDashboard(cfg, project, 'claude') as { chatId?: string }).chatId!;
+    expect(setChatModelFromDashboard(cfg, chatId, 'claude', 'opus')).toMatchObject({ ok: true });
+    expect(getChatOverview(chatId).active!.models).toEqual({ claude: 'opus' });
+    expect(setChatModelFromDashboard(cfg, chatId, 'claude', 'gpt-9').ok).toBe(false);
+    expect(setChatModelFromDashboard(cfg, chatId, 'gemini', 'opus').ok).toBe(false);
+    expect(setChatModelFromDashboard(cfg, chatId, 'claude', '').ok).toBe(true);
+    expect(getChatOverview(chatId).active!.models).toEqual({});
+  });
+
   it('frees a chat whose process died', async () => {
     const cfg = parseConfig(`agents: { claude: { cmd: c }, agy: { cmd: a } }\ndashboard: { projects: ["${project}"] }`);
     const created = await newChatFromDashboard(cfg, project, 'auto');
     const chatId = (created as { chatId?: string }).chatId!;
     const { updateChat } = await import('../packages/core/store');
     updateChat(chatId, (c) => { c.status = 'running'; c.pid = 2_000_000_000; c.messages.push({ id: 'm1', role: 'user', text: 'x', at: new Date().toISOString(), status: 'running' }); });
-    const o = getChatOverview(project)!;
+    const o = getChatOverview(chatId);
     expect(o.active!.status).toBe('idle');
     expect(o.active!.messages.at(-1)!.text).toMatch(/Процес відповіді зник/);
   });

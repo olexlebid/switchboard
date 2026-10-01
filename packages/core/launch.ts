@@ -5,10 +5,11 @@ import { chmodSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { saveAttachments, type IncomingFile } from './attachments';
-import { addUserMessage, busyWith, createChat, setChatMode } from './chat';
+import { addUserMessage, busyWith, createChat, setChatMode, setChatModel } from './chat';
 import { SbError } from './errors';
 import { blockingDirtyFiles, currentBranch, stashDirty, summarizeDirty } from './git';
 import { mergeBranch, previewMerge, type MergePreview } from './merge';
+import { isKnownModel } from './models';
 import { defaultConfigPath } from './config';
 import { maskSecrets } from './mask';
 import { readState, runsDir } from './store';
@@ -197,6 +198,15 @@ export function setChatModeFromDashboard(chatId: string, mode: string): LaunchRe
   if (mode !== 'auto' && mode !== 'claude' && mode !== 'agy') return fail('Невідомий режим чату.');
   setChatMode(chatId, mode as 'auto' | AgentId);
   return { ok: true, message: 'Режим змінено.' };
+}
+
+/** Picks the model an agent uses in this chat ('' = the agent's default). */
+export function setChatModelFromDashboard(cfg: SwitchboardConfig, chatId: string, agent: string, model: string): LaunchResult {
+  if (!readState().chats[chatId]) return fail('Чату не існує.', 404);
+  if (agent !== 'claude' && agent !== 'agy') return fail('Невідомий агент.');
+  if (!isKnownModel(cfg, agent, model)) return fail('Такої моделі в списку немає.');
+  setChatModel(chatId, agent, model);
+  return { ok: true, message: model ? `Модель ${agent}: ${model}.` : `Модель ${agent}: за замовчуванням.` };
 }
 
 /** Adds the user's message (with files) and starts a detached `sb chat-turn` for it. */

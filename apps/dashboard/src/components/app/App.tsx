@@ -1,4 +1,4 @@
-// The dashboard: limits of both agents (left), chat (right), manual marks, new task + task panel.
+// The dashboard: limits of both agents (left), chat windows as tabs (right), manual marks, activity (tasks + chats).
 // Everything is built from shadcn/ui components; data comes from GET /api/state.
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -6,7 +6,6 @@ import { STATUS_LABEL } from '@core/status';
 import type { AgentStatus } from '@core/types';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -18,15 +17,17 @@ import { AgentCard } from './AgentCard';
 import { ChatPanel } from './ChatPanel';
 import { ManualMarks } from './ManualMarks';
 import { StatusBadge } from './StatusBadge';
-import { TaskForm } from './TaskForm';
 import { TaskPanel } from './TaskPanel';
 import { ThemeToggle } from './ThemeToggle';
 
 const ORDER: AgentStatus[] = ['available', 'low', 'reserve', 'exhausted', 'unknown'];
 
 export default function App() {
-  const [stored, setStored] = useStoredString('sb-project');
-  const { state, offline, reload } = useDashboard(stored);
+  // Open chat tabs (comma-separated ids) and the selected one live in localStorage; the server holds the chats.
+  const [openRaw, setOpenRaw] = useStoredString('sb-open-chats');
+  const [selected, setSelected] = useStoredString('sb-chat');
+  const openIds = useMemo(() => (openRaw ?? '').split(',').filter(Boolean), [openRaw]);
+  const { state, offline, reload } = useDashboard(selected);
   const now = useNow(15_000);
   const [notice, setNotice] = useState<ActionResult>();
   const [refreshing, setRefreshing] = useState(false);
@@ -35,7 +36,28 @@ export default function App() {
   const noticeTimer = useRef<number>(undefined);
 
   const projects = state?.tasks.projects ?? [];
-  const project = useMemo(() => projects.find((p) => p.path === stored) ?? projects[0], [projects, stored]);
+  const chats = state?.chat.chats ?? [];
+  const tabs = openIds.map((id) => chats.find((c) => c.id === id)).filter((c): c is NonNullable<typeof c> => c !== undefined);
+  const activeId = tabs.some((t) => t.id === selected) ? selected : tabs[0]?.id;
+
+  const openChat = (id: string) => {
+    if (!openIds.includes(id)) setOpenRaw([...openIds, id].join(','));
+    setSelected(id);
+  };
+  const closeChat = (id: string) => {
+    const rest = openIds.filter((x) => x !== id);
+    setOpenRaw(rest.join(','));
+    if (activeId === id) setSelected(rest[0] ?? '');
+  };
+
+  // First visit: open the most recent chat. After that the user decides which tabs exist (closing all stays closed).
+  useEffect(() => {
+    if (openRaw === undefined && chats.length > 0) openChat(chats[0]!.id);
+  }, [openRaw, chats.length]);
+  // Keep the stored selection pointing at a real tab, so the server sends that conversation.
+  useEffect(() => {
+    if (activeId && activeId !== selected) setSelected(activeId);
+  }, [activeId, selected]);
 
   const show = (r: ActionResult, retry?: () => void) => {
     // A dirty working tree is resolved in a dialog (stash + repeat) instead of a bare error line.
@@ -52,6 +74,16 @@ export default function App() {
   };
   useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
   const reloadAsync = async () => { await reload(); };
+
+  // A new chat per project; an untouched one is reused instead of piling up empty chats.
+  const newChat = async (project: string) => {
+    const spare = chats.find((c) => c.project === project && c.title === 'Новий чат' && c.status === 'idle');
+    if (spare) { openChat(spare.id); return; }
+    const r = await post('/api/chat', { op: 'new', project, mode: 'auto' });
+    if (!r.ok || !r.chatId) { show(r); return; }
+    openChat(r.chatId);
+    await reload();
+  };
 
   const refresh = async () => {
     setRefreshing(true);
@@ -92,14 +124,6 @@ export default function App() {
             ))}
           </ul>
           <div className="ml-auto flex items-center gap-2">
-            {projects.length > 0 && (
-              <Select value={project?.path} onValueChange={setStored}>
-                <SelectTrigger size="sm" className="w-44" aria-label="Проєкт"><SelectValue /></SelectTrigger>
-                <SelectContent align="end">
-                  {projects.map((p) => <SelectItem key={p.path} value={p.path}>{p.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            )}
             <p className="text-xs text-muted-foreground" aria-live="polite">
               Оновлено <time dateTime={updated.toISOString()}>{updated.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
             </p>
@@ -122,10 +146,13 @@ export default function App() {
             {state.overview.agents.map((a) => <AgentCard key={a.agent} agent={a} thresholds={state.overview.thresholds} now={now} />)}
           </div>
           {/* The chat follows the height of the two cards on the left (absolute fill), with a sensible minimum. */}
-          <div className="relative min-h-[32rem]">
+          <div className="relative min-h-[34rem]">
             <div className="absolute inset-0">
-              {project ? (
-                <ChatPanel project={project.path} projectName={project.name} chat={state.chat} rules={state.uploads} now={now} onResult={show} onMerge={setMergeTarget} reload={reloadAsync} />
+              {projects.length > 0 ? (
+                <ChatPanel
+                  chat={state.chat} tabs={tabs} activeId={activeId} projects={projects} models={state.models} rules={state.uploads} now={now}
+                  onResult={show} onMerge={setMergeTarget} onSelect={openChat} onClose={closeChat} onNew={(p) => void newChat(p)} reload={reloadAsync}
+                />
               ) : (
                 <NoProjects />
               )}
@@ -139,14 +166,7 @@ export default function App() {
 
         <ManualMarks cards={state.overview.manual} onChange={(id, v) => void mark(id, v)} />
 
-        <section aria-label="Задачі" className="grid items-start gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
-          {project ? (
-            <TaskForm project={project.path} projectName={project.name} types={state.tasks.types} rules={state.uploads} onResult={show} reload={reloadAsync} />
-          ) : (
-            <NoProjects />
-          )}
-          <TaskPanel tasks={state.tasks} rules={state.uploads} now={now} onResult={show} onMerge={setMergeTarget} reload={reloadAsync} />
-        </section>
+        <TaskPanel tasks={state.tasks} chats={chats} rules={state.uploads} now={now} onResult={show} onMerge={setMergeTarget} onOpenChat={openChat} reload={reloadAsync} />
       </main>
     </TooltipProvider>
   );

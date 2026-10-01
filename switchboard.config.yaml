@@ -4,13 +4,13 @@ agents:
     cmd: claude
     headlessArgs: ["-p", "--output-format", "json"]   # the prompt is inserted right after -p
     usageArgs: ["-p", "/usage"]      # prints "Current session: N% used ..." (recon rows 15)
-    models: []
+    models: []                       # models offered in the chat picker; empty = fable, opus, sonnet, haiku (aliases)
   agy:
     cmd: agy
     headlessArgs: ["-p", "--output-format", "json"]
     usageArgs: ["-p", "/quota"]      # prints per-group quota lines (recon row 16)
     settingsPath: "~/.gemini/antigravity-cli/settings.json"   # where agy reads permissions.allow (recon rounds 4-7)
-    models: []
+    models: []                       # agy: the picker lists `agy models` (cached); this field is not used
 
 limits:
   staleAfterMin: 30       # data older than this is "unknown" (unless a window is exhausted)

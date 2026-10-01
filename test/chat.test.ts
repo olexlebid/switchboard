@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { saveAttachments } from '../packages/core/attachments';
-import { addUserMessage, chatOrder, createChat, runChatTurn, setChatMode, transcript, type ChatDeps } from '../packages/core/chat';
+import { addUserMessage, chatOrder, createChat, runChatTurn, setChatMode, setChatModel, transcript, type ChatDeps } from '../packages/core/chat';
 import { parseConfig } from '../packages/core/config';
 import { buildOverview } from '../packages/core/overview';
 import { readState, updateState } from '../packages/core/store';
@@ -41,7 +41,7 @@ function launcher(name: string, env: Record<string, string>): string {
 
 function cfgFor(claude = 'chat', agy = 'chat') {
   chmodSync(FAKE, 0o755);
-  const common = { FAKE_PROMPT_DUMP: dump, FAKE_RESET_AT: inHours(2) };
+  const common = { FAKE_PROMPT_DUMP: dump, FAKE_ARGV_DUMP: join(dir, 'argv.txt'), FAKE_RESET_AT: inHours(2) };
   const c = launcher('claude-fake', { ...common, FAKE_AGENT_STYLE: 'claude', FAKE_AGENT_MODE: claude });
   const a = launcher('agy-fake', { ...common, FAKE_AGENT_STYLE: 'agy', FAKE_AGENT_MODE: agy });
   return parseConfig(`
@@ -122,6 +122,18 @@ describe('chat turns', () => {
     const last = readState().chats[chat.id]!.messages.filter((m) => m.role === 'system').at(-1)!;
     expect(last.text).toContain('read_url');
     expect(last.text).toContain('Прикріпи скріншот фрейма');
+  });
+
+  it('passes the model chosen for the agent to the CLI, and nothing when none is chosen', async () => {
+    const cfg = cfgFor();
+    const chat = await createChat({ project, mode: 'claude' });
+    await turn(cfg, chat.id, 'перше');
+    setChatModel(chat.id, 'claude', 'opus');
+    await turn(cfg, chat.id, 'друге');
+    setChatModel(chat.id, 'claude', '');
+    await turn(cfg, chat.id, 'трете');
+    expect(readFileSync(join(dir, 'argv.txt'), 'utf8').trim().split('\n')).toEqual(['claude model=-', 'claude model=opus', 'claude model=-']);
+    expect(() => setChatModel(chat.id, 'claude', '--dangerously-skip-permissions')).toThrow(/назва моделі/);
   });
 
   it('gives a newly selected agent a transcript, then keeps its own session', async () => {

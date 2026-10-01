@@ -21,7 +21,7 @@ export type State = {
   /** project path -> id of the chat shown in the dashboard */
   activeChats: Record<string, string>;
   /** Slow-changing facts cached between refreshes. */
-  meta: { agyModels?: { count: number; at: string } };
+  meta: { agyModels?: { count: number; at: string }; agyModelList?: { at: string; list: { id: string; label: string }[] } };
 };
 
 const HISTORY_LIMIT = 500;

@@ -1,7 +1,7 @@
 // Runs one agent process once: argv, temporary agy rules, log, timeout, output interpretation.
 // Shared by tasks (flow.ts) and chat turns (chat.ts).
 import { realpathSync } from 'node:fs';
-import { AgyPermissionError, applyAgyRules, DEFAULT_AGY_SETTINGS, recoverAgyRules, type AgyRuleHandle } from './agy-permissions';
+import { AgyBusyError, AgyPermissionError, applyAgyRules, DEFAULT_AGY_SETTINGS, recoverAgyRules, type AgyRuleHandle } from './agy-permissions';
 import { SbError } from './errors';
 import { interpretOutput, type Outcome } from './interpret';
 import { buildAgentArgs, logPathFor, runAgentProcess, type ProcessResult } from './runner';
@@ -16,6 +16,8 @@ export type AgentRunInput = {
   timeoutMs: number;
   /** Continue this agent-side conversation. */
   sessionId?: string;
+  /** `--model` for this run; empty = the agent's own default. */
+  model?: string;
   say: (s: string) => void;
   warnings: string[];
   /** Extra text for the first log header line, e.g. "(continuation)". */
@@ -27,27 +29,39 @@ export type AgentRunResult = { proc: ProcessResult; outcome: Outcome; logPath: s
 
 export async function runAgentOnce(input: AgentRunInput): Promise<AgentRunResult> {
   const { cfg, agent, project, prompt, runId, timeoutMs, say, warnings } = input;
-  const args = buildAgentArgs(agent, cfg.agents[agent], prompt, cfg.permissions[agent], timeoutMs, input.sessionId);
+  const args = buildAgentArgs(agent, cfg.agents[agent], prompt, cfg.permissions[agent], timeoutMs, input.sessionId, input.model);
   const logPath = logPathFor(runId);
 
   // agy takes permissions only from its user-level settings: add a directory-scoped rule for this run.
   let rules: AgyRuleHandle | undefined;
   if (agent === 'agy' && cfg.permissions.agy.allow.length > 0) {
-    try {
-      const recovered = recoverAgyRules();
-      if (recovered) warnings.push(recovered);
-      const real = realpathSync(project);
-      const fill = (list: string[]) => list.map((r) => r.replaceAll('{project}', real));
-      rules = applyAgyRules({
-        settingsPath: cfg.agents.agy.settingsPath ?? DEFAULT_AGY_SETTINGS,
-        project: real,
-        allow: fill(cfg.permissions.agy.allow),
-        deny: fill(cfg.permissions.agy.deny),
-      });
-      say(`  agy: тимчасовий дозвіл на запис лише в ${real}/ (знімається після запуску)`);
-    } catch (e) {
-      if (e instanceof AgyPermissionError) throw new SbError(e.message, 3);
-      throw e;
+    // agy keeps its rules in one shared settings file, so parallel agy runs (other projects) take turns.
+    const deadline = Date.now() + timeoutMs;
+    let announced = false;
+    for (;;) {
+      try {
+        const recovered = recoverAgyRules();
+        if (recovered) warnings.push(recovered);
+        const real = realpathSync(project);
+        const fill = (list: string[]) => list.map((r) => r.replaceAll('{project}', real));
+        rules = applyAgyRules({
+          settingsPath: cfg.agents.agy.settingsPath ?? DEFAULT_AGY_SETTINGS,
+          project: real,
+          allow: fill(cfg.permissions.agy.allow),
+          deny: fill(cfg.permissions.agy.deny),
+        });
+        say(`  agy: тимчасовий дозвіл на запис лише в ${real}/ (знімається після запуску)`);
+        break;
+      } catch (e) {
+        if (e instanceof AgyBusyError && Date.now() < deadline) {
+          if (!announced) say('  agy зайнятий іншим запуском: чекаю своєї черги…');
+          announced = true;
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        if (e instanceof AgyPermissionError) throw new SbError(e.message, 3);
+        throw e;
+      }
     }
   }
 

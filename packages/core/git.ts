@@ -86,10 +86,15 @@ export async function switchBack(cwd: string, branch: string): Promise<void> {
   await gitOk(cwd, ['checkout', branch]);
 }
 
+/** `git add -A` limited to real work: macOS `.DS_Store` noise is never committed to a task/chat branch. */
+export const STAGE_ARGS = ['add', '-A', '--', '.', ':(exclude,glob)**/.DS_Store'];
+
 /** Commits everything. Returns the new sha, or undefined when there was nothing to commit. */
 export async function commitAll(cwd: string, message: string): Promise<string | undefined> {
   if ((await dirtyFiles(cwd)).length === 0) return undefined;
-  await gitOk(cwd, ['add', '-A']);
+  await gitOk(cwd, STAGE_ARGS);
+  // Only noise (.DS_Store) was dirty: nothing got staged, so there is nothing to commit.
+  if ((await git(cwd, ['diff', '--cached', '--quiet'])).code === 0) return undefined;
   // Fall back to a neutral identity only when the repo has none configured.
   const hasIdentity = (await git(cwd, ['config', 'user.email'])).stdout.trim() !== '';
   const identity = hasIdentity ? [] : ['-c', 'user.name=Switchboard', '-c', 'user.email=switchboard@localhost'];
@@ -141,7 +146,7 @@ export async function mergeFastForward(cwd: string, branch: string): Promise<str
 
 /** Stages everything (including new files). */
 export async function stageAll(cwd: string): Promise<void> {
-  await gitOk(cwd, ['add', '-A']);
+  await gitOk(cwd, STAGE_ARGS);
 }
 
 /** `git diff --cached --stat <base>`: everything staged plus earlier commits, compared with the task start. */

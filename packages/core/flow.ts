@@ -7,7 +7,7 @@ import { loadBatch } from './attachments';
 import { runAgentOnce } from './agent-run';
 import { SbError } from './errors';
 import { onExit } from './cleanup';
-import { blockingDirtyFiles, changedFiles, checkoutBranch, commitAll, currentBranch, headSha, isGitRepo, pushBranch, switchBack } from './git';
+import { STAGE_ARGS, blockingDirtyFiles, changedFiles, checkoutBranch, commitAll, currentBranch, headSha, isGitRepo, pushBranch, switchBack } from './git';
 import { outputTail, writeCheckpoint } from './handoff';
 import type { Outcome } from './interpret';
 import { detectLimit, type LimitSignal } from './limit-detect';
@@ -197,7 +197,7 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
     const git = (...args: string[]) => spawnSync('git', args, { cwd: project, encoding: 'utf8' });
     if (git('status', '--porcelain').stdout.trim()) {
       const identity = git('config', 'user.email').stdout.trim() ? [] : ['-c', 'user.name=Switchboard', '-c', 'user.email=switchboard@localhost'];
-      git('add', '-A');
+      git(...STAGE_ARGS);
       git(...identity, 'commit', '-m', `wip(sb): checkpoint ${task.id} interrupted`);
     }
     task.status = 'failed';

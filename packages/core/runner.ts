@@ -62,6 +62,8 @@ export function buildAgentArgs(
   timeoutMs: number,
   /** Resume this agent-side conversation (chat turns after the first). */
   sessionId?: string,
+  /** `--model` value; empty = the agent's own default. */
+  model?: string,
 ): string[] {
   const [flag, ...rest] = cfg.headlessArgs;
   const args = [flag!, prompt, ...rest];
@@ -73,6 +75,7 @@ export function buildAgentArgs(
     args.push('--print-timeout', `${Math.max(1, Math.floor(timeoutMs / 1000))}s`);
   }
   if (sessionId) args.push(agent === 'claude' ? '--resume' : '--conversation', sessionId);
+  if (model && !model.startsWith('-')) args.push('--model', model);
   return [...args, ...rules.args];
 }
 

@@ -1,8 +1,8 @@
-// POST /api/chat: chat actions. `op` is one of new | send | stop | mode | select | retry.
+// POST /api/chat: chat actions. `op` is one of new | send | stop | mode | model | select | retry.
 import type { APIRoute } from 'astro';
 import { selectChat } from '@core/chat-overview';
 import { loadConfig } from '@core/config';
-import { newChatFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, stopChat } from '@core/launch';
+import { newChatFromDashboard, retryChat, sendChatMessage, setChatModeFromDashboard, setChatModelFromDashboard, stopChat } from '@core/launch';
 import { badRequest, field, guard, json, respond, uploadsOf } from '../../api';
 
 export const POST: APIRoute = async ({ request }) => {
@@ -23,6 +23,8 @@ export const POST: APIRoute = async ({ request }) => {
       return respond(stopChat(chat));
     case 'mode':
       return respond(setChatModeFromDashboard(chat, field(form, 'mode')));
+    case 'model':
+      return respond(setChatModelFromDashboard(cfg, chat, field(form, 'agent'), field(form, 'model')));
     case 'retry':
       return respond(await retryChat(cfg, chat));
     case 'select':

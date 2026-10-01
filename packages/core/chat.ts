@@ -9,7 +9,7 @@ import { attachmentsPrompt, loadBatch } from './attachments';
 import { runAgentOnce } from './agent-run';
 import { onExit } from './cleanup';
 import { SbError } from './errors';
-import { blockingDirtyFiles, changedFiles, checkoutBranch, commitAll, currentBranch, headSha, isGitRepo, pushBranch, summarizeDirty, switchBack } from './git';
+import { STAGE_ARGS, blockingDirtyFiles, changedFiles, checkoutBranch, commitAll, currentBranch, headSha, isGitRepo, pushBranch, summarizeDirty, switchBack } from './git';
 import type { Outcome } from './interpret';
 import { detectLimit } from './limit-detect';
 import { collectUsage } from './limits';
@@ -103,6 +103,13 @@ export function addUserMessage(
     if (c.turns === 0 && c.title === 'Новий чат') c.title = oneLine(message.text, 60);
   });
   return message;
+}
+
+/** Sets (or clears, with an empty string) the model used by `agent` in this chat. */
+export function setChatModel(chatId: string, agent: AgentId, model: string): void {
+  if (agent !== 'claude' && agent !== 'agy') throw new SbError('Невідомий агент.', 2);
+  if (model && !/^[A-Za-z0-9][\w.:()-]{0,79}$/.test(model)) throw new SbError('Некоректна назва моделі.', 2);
+  if (!updateChat(chatId, (c) => { c.models = { ...c.models, [agent]: model || undefined }; })) throw new SbError('Чату не існує.', 2);
 }
 
 export function setChatMode(chatId: string, mode: 'auto' | AgentId): void {
@@ -204,7 +211,7 @@ export async function runChatTurn(
     const git = (...a: string[]) => spawnSync('git', a, { cwd: project, encoding: 'utf8' });
     if (git('status', '--porcelain').stdout.trim()) {
       const identity = git('config', 'user.email').stdout.trim() ? [] : ['-c', 'user.name=Switchboard', '-c', 'user.email=switchboard@localhost'];
-      git('add', '-A');
+      git(...STAGE_ARGS);
       git(...identity, 'commit', '-m', `wip(sb): chat ${chatId} interrupted`);
     }
     updateChat(chatId, (c) => {
@@ -261,7 +268,7 @@ export async function runChatTurn(
       const attempt = async (sid?: string) => {
         const prompt = buildChatPrompt(chat, message, agent, existing, Boolean(sid));
         say(`▶ ${agent}${sid ? ' (сесія триває)' : ''}: ${oneLine(message.text, 70)}`);
-        return runAgentOnce({ cfg, agent, project, prompt, runId, timeoutMs, sessionId: sid, say, warnings, now, logNote: `chat=${chatId} branch=${chat.branch}` });
+        return runAgentOnce({ cfg, agent, project, prompt, runId, timeoutMs, sessionId: sid, model: chat.models?.[agent], say, warnings, now, logNote: `chat=${chatId} branch=${chat.branch}` });
       };
       let { proc, outcome, logPath } = await attempt(sessionId);
       // A lost session (for example after the agent's own cleanup): start over with the transcript.

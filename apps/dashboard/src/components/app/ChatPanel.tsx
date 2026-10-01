@@ -1,18 +1,21 @@
 // The chat: conversation with an agent that may edit project files (branch sb/c-…), mode switch, history,
 // attachments, stop button. Replies are rendered from the server's safe markdown subset.
-import { FilePen, GitMerge, MessageSquarePlus, RotateCcw, Send, Square } from 'lucide-react';
+import { Clock, FilePen, GitMerge, History, MessageSquarePlus, RotateCcw, Send, Square, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { ChatMessageView, ChatOverview } from '@core/chat-overview';
+import type { ChatListItem, ChatMessageView, ChatOverview } from '@core/chat-overview';
 import type { UploadRules } from '@core/dashboard-state';
+import type { AgentId, ModelOption } from '@core/types';
 import { formatDuration } from '@core/time';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { post, type ActionResult, type OnResult } from '@/lib/api';
@@ -20,16 +23,26 @@ import { cn } from 'cn';
 import { AttachButton, AttachChips, dropHandlers } from './AttachPicker';
 import type { MergeTarget } from './MergeDialog';
 
+type Project = { path: string; name: string };
+
 type Props = {
-  project: string;
-  projectName: string;
-  chat?: ChatOverview;
+  chat: ChatOverview;
+  /** Chats open as tabs, in tab order. */
+  tabs: ChatListItem[];
+  activeId?: string;
+  projects: Project[];
+  models: Record<AgentId, ModelOption[]>;
   rules: UploadRules;
   now: number;
   onResult: OnResult;
   onMerge: (t: MergeTarget) => void;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
+  onNew: (project: string) => void;
   reload: () => Promise<void>;
 };
+
+const DEFAULT_MODEL = '__default';
 
 // Tailwind classes for the markdown subset (no typography plugin: the shadcn way is plain utilities).
 const MARKDOWN =
@@ -68,17 +81,22 @@ function Message({ m }: { m: ChatMessageView }) {
   );
 }
 
-export function ChatPanel({ project, projectName, chat, rules, now, onResult, onMerge, reload }: Props) {
-  const active = chat?.active;
-  const [text, setText] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
+export function ChatPanel({ chat, tabs, activeId, projects, models, rules, now, onResult, onMerge, onSelect, onClose, onNew, reload }: Props) {
+  // Only show a conversation that is really the selected tab (the data may still be loading after a switch).
+  const active = chat.active && chat.active.id === activeId ? chat.active : undefined;
+  // Drafts are kept per chat, so switching tabs never loses what was typed.
+  const [drafts, setDrafts] = useState<Record<string, { text: string; files: File[] }>>({});
+  const draft = (active && drafts[active.id]) || { text: '', files: [] };
+  const setDraft = (id: string, next: { text?: string; files?: File[] }) => setDrafts((d) => ({ ...d, [id]: { ...(d[id] ?? { text: '', files: [] }), ...next } }));
+  const text = draft.text;
+  const files = draft.files;
   const [sending, setSending] = useState(false);
-  // Mode chosen before the first message (a chat does not exist yet); afterwards the chat's own mode wins.
-  const [draftMode, setDraftMode] = useState<'auto' | 'claude' | 'agy'>('auto');
-  const mode = active?.mode ?? draftMode;
+  const mode = active?.mode ?? 'auto';
   const viewport = useRef<HTMLDivElement>(null);
   const running = active?.status === 'running';
   const lastId = active?.messages.at(-1)?.id;
+  const openIds = new Set(tabs.map((t) => t.id));
+  const history = chat.chats.filter((c) => !openIds.has(c.id)).slice(0, 15);
 
   // Keep the newest message in view.
   useEffect(() => {
@@ -94,125 +112,181 @@ export function ChatPanel({ project, projectName, chat, rules, now, onResult, on
   };
 
   const send = async () => {
-    if (sending || running || (!text.trim() && files.length === 0)) return;
+    if (!active || sending || running || (!text.trim() && files.length === 0)) return;
     setSending(true);
-    // A chat is created on the first message of a project.
-    let chatId = active?.id;
-    if (!chatId) {
-      const created = await post('/api/chat', { op: 'new', project, mode });
-      if (!created.ok) { onResult(created); setSending(false); return; }
-      chatId = created.chatId;
-    }
-    if (!chatId) { onResult({ ok: false, error: 'Не вдалося створити чат.' }); setSending(false); return; }
-    await sendTo(chatId);
+    await sendTo(active.id, text, files);
     setSending(false);
   };
 
   // `sendTo` is also the retry after the user stashes a dirty tree: same chat, same text and files.
-  const sendTo = async (chatId: string): Promise<void> => {
-    const r = await act({ op: 'send', chat: chatId, text }, files, () => void sendTo(chatId));
-    if (r.ok) { setText(''); setFiles([]); }
+  const sendTo = async (chatId: string, body: string, attached: File[]): Promise<void> => {
+    const r = await act({ op: 'send', chat: chatId, text: body }, attached, () => void sendTo(chatId, body, attached));
+    if (r.ok) setDraft(chatId, { text: '', files: [] });
   };
 
-  const drop = dropHandlers({ files, rules, onChange: setFiles, onProblem: (message) => onResult({ ok: false, error: message }) });
+  const drop = dropHandlers({ files, rules, onChange: (f) => active && setDraft(active.id, { files: f }), onProblem: (message) => onResult({ ok: false, error: message }) });
   const waitingLeft = active?.waitUntil ? Date.parse(active.waitUntil) - now : undefined;
+  const modelList = mode === 'auto' ? [] : models[mode];
+  const chosenModel = mode === 'auto' ? undefined : active?.models[mode];
+
+  const newChatMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" disabled={projects.length === 0}><MessageSquarePlus aria-hidden="true" /> Новий чат</Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>Проєкт нового чату</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {projects.map((p) => <DropdownMenuItem key={p.path} onSelect={() => onNew(p.path)}>{p.name}</DropdownMenuItem>)}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
     <Card size="sm" className="h-full" {...drop}>
-      <CardHeader>
-        <CardTitle><h2 className="text-base font-medium">Чат · {projectName}</h2></CardTitle>
-        <CardDescription>
-          {active ? <>Гілка <code className="rounded bg-muted px-1">{active.branch}</code> · у {active.baseBranch} потрапляє лише після твого «Влити»</> : 'Напиши повідомлення, щоб почати розмову.'}
-        </CardDescription>
-        <CardAction className="flex items-center gap-2">
-          {active && active.messages.some((m) => m.role === 'agent') && (
-            <Button variant="outline" size="sm" disabled={running || sending} onClick={() => onMerge({ kind: 'chat', id: active.id })}>
-              <GitMerge aria-hidden="true" /> Влити в {active.baseBranch}
-            </Button>
-          )}
-          {chat && chat.chats.length > 0 && (
-            <Select value={active?.id} onValueChange={(id) => void act({ op: 'select', chat: id })}>
-              <SelectTrigger size="sm" className="w-44" aria-label="Історія чатів"><SelectValue placeholder="Історія" /></SelectTrigger>
-              <SelectContent align="end">
-                {chat.chats.map((c) => <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          )}
-          <Button variant="outline" size="sm" disabled={running || sending || (active?.messages.length ?? 1) === 0} title={active && active.messages.length === 0 ? 'Поточний чат ще порожній' : undefined} onClick={() => void act({ op: 'new', project, mode })}>
-            <MessageSquarePlus aria-hidden="true" /> Новий чат
-          </Button>
-        </CardAction>
-      </CardHeader>
-
-      <CardContent className="min-h-0 flex-1">
-        <ScrollArea ref={viewport} className="h-full min-h-0 flex-1 rounded-md border">
-          <div className="flex flex-col gap-3 p-3" aria-live="polite">
-            {!active || active.messages.length === 0 ? (
-              <Empty className="border-0 p-6">
-                <EmptyHeader>
-                  <EmptyTitle>Чат порожній</EmptyTitle>
-                  <EmptyDescription>Опиши, що змінити, або прикріпи скріншот/PDF/документ. Агент може редагувати файли проєкту.</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
-              active.messages.map((m) => <Message key={m.id} m={m} />)
-            )}
-            {running && (
-              <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-                <Spinner /> Агент працює{active?.runningSince ? ` · ${formatDuration(now - Date.parse(active.runningSince))}` : ''}
-                <Button variant="destructive" size="xs" className="ml-auto" onClick={() => void act({ op: 'stop', chat: active!.id })}>
-                  <Square aria-hidden="true" /> Зупинити
-                </Button>
-              </p>
-            )}
-          </div>
-        </ScrollArea>
-        {active?.status === 'waiting' && (
-          <Alert>
-            <AlertTitle>Чекаю на вільного агента</AlertTitle>
-            <AlertDescription className="flex flex-wrap items-center gap-2">
-              {waitingLeft !== undefined && waitingLeft > 0 ? `Скидання ліміту через ${formatDuration(waitingLeft)}.` : 'Ліміт уже мав скинутися.'}
-              <Button variant="outline" size="xs" onClick={() => void act({ op: 'retry', chat: active.id })}><RotateCcw aria-hidden="true" /> Спробувати знову</Button>
-            </AlertDescription>
-          </Alert>
+      <div className="flex items-center gap-2 px-4">
+        {tabs.length > 0 ? (
+          <Tabs value={activeId} onValueChange={onSelect} className="min-w-0 flex-1">
+            <TabsList className="h-auto w-full justify-start overflow-x-auto" aria-label="Відкриті чати">
+              {tabs.map((t) => (
+                <TabsTrigger key={t.id} value={t.id} className="max-w-48 flex-none gap-1.5" title={`${t.projectName}: ${t.title}`}>
+                  {t.status === 'running' && <><Spinner className="size-3" /><span className="sr-only">виконується:</span></>}
+                  {t.status === 'waiting' && <><Clock className="size-3" aria-hidden="true" /><span className="sr-only">чекає:</span></>}
+                  <span className="truncate">{t.projectName} · {t.title}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        ) : (
+          <span className="flex-1 text-sm text-muted-foreground">Чатів ще немає</span>
         )}
-      </CardContent>
+        {newChatMenu}
+        {history.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon-sm" aria-label="Історія чатів"><History aria-hidden="true" /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-w-80">
+              <DropdownMenuLabel>Закриті чати</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {history.map((c) => <DropdownMenuItem key={c.id} onSelect={() => onSelect(c.id)}><span className="truncate">{c.projectName} · {c.title}</span></DropdownMenuItem>)}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
 
-      <CardFooter className="flex-col items-stretch gap-2">
-        <AttachChips files={files} onChange={setFiles} />
-        <Textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-          rows={2}
-          maxLength={8000}
-          placeholder="Напиши агентові… (Enter — надіслати, Shift+Enter — новий рядок; скріншот можна вставити Ctrl+V)"
-          aria-label="Повідомлення агентові"
-          className="min-h-14 resize-none"
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <AttachButton files={files} rules={rules} onChange={setFiles} onProblem={(message) => onResult({ ok: false, error: message })} disabled={running} />
-          <ToggleGroup
-            type="single"
-            size="sm"
-            variant="outline"
-            value={mode}
-            onValueChange={(v) => {
-              if (v !== 'auto' && v !== 'claude' && v !== 'agy') return;
-              if (active) void act({ op: 'mode', chat: active.id, mode: v });
-              else setDraftMode(v);
-            }}
-            aria-label="Хто відповідає"
-          >
-            <ToggleGroupItem value="auto" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Авто</ToggleGroupItem>
-            <ToggleGroupItem value="claude" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Claude</ToggleGroupItem>
-            <ToggleGroupItem value="agy" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Antigravity</ToggleGroupItem>
-          </ToggleGroup>
-          <Button className="ml-auto" onClick={() => void send()} disabled={sending || running || (!text.trim() && files.length === 0)}>
-            {sending ? <Spinner /> : <Send aria-hidden="true" />} Надіслати
-          </Button>
-        </div>
-      </CardFooter>
+      {!active ? (
+        <CardContent className="min-h-0 flex-1">
+          <Empty className="border-0 p-6">
+            <EmptyHeader>
+              <EmptyTitle>{tabs.length === 0 ? 'Створи чат' : 'Завантажую чат…'}</EmptyTitle>
+              <EmptyDescription>Кожен чат працює у своєму проєкті й може йти паралельно з іншими. Натисни «Новий чат» і обери проєкт.</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </CardContent>
+      ) : (
+        <>
+          <CardHeader>
+            <CardTitle><h2 className="line-clamp-1 text-base font-medium" title={active.title}>{active.projectName} · {active.title}</h2></CardTitle>
+            <CardDescription>
+              Гілка <code className="rounded bg-muted px-1">{active.branch}</code> · у {active.baseBranch} потрапляє лише після твого «Влити»
+            </CardDescription>
+            <CardAction className="flex items-center gap-2">
+              {active.messages.some((m) => m.role === 'agent') && (
+                <Button variant="outline" size="sm" disabled={running || sending} onClick={() => onMerge({ kind: 'chat', id: active.id })}>
+                  <GitMerge aria-hidden="true" /> Влити в {active.baseBranch}
+                </Button>
+              )}
+              <Button variant="ghost" size="icon-sm" onClick={() => onClose(active.id)} aria-label="Закрити вкладку" title="Закрити вкладку (чат лишається в історії)">
+                <X aria-hidden="true" />
+              </Button>
+            </CardAction>
+          </CardHeader>
+
+          <CardContent className="min-h-0 flex-1">
+            <ScrollArea ref={viewport} className="h-full min-h-0 flex-1 rounded-md border">
+              <div className="flex flex-col gap-3 p-3" aria-live="polite">
+                {active.messages.length === 0 ? (
+                  <Empty className="border-0 p-6">
+                    <EmptyHeader>
+                      <EmptyTitle>Чат порожній</EmptyTitle>
+                      <EmptyDescription>Опиши, що змінити, або прикріпи скріншот/PDF/документ. Агент може редагувати файли проєкту.</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  active.messages.map((m) => <Message key={m.id} m={m} />)
+                )}
+                {running && (
+                  <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+                    <Spinner /> Агент працює{active.runningSince ? ` · ${formatDuration(now - Date.parse(active.runningSince))}` : ''}
+                    <Button variant="destructive" size="xs" className="ml-auto" onClick={() => void act({ op: 'stop', chat: active.id })}>
+                      <Square aria-hidden="true" /> Зупинити
+                    </Button>
+                  </p>
+                )}
+              </div>
+            </ScrollArea>
+            {active.status === 'waiting' && (
+              <Alert>
+                <AlertTitle>Чекаю на вільного агента</AlertTitle>
+                <AlertDescription className="flex flex-wrap items-center gap-2">
+                  {waitingLeft !== undefined && waitingLeft > 0 ? `Скидання ліміту через ${formatDuration(waitingLeft)}.` : 'Ліміт уже мав скинутися.'}
+                  <Button variant="outline" size="xs" onClick={() => void act({ op: 'retry', chat: active.id })}><RotateCcw aria-hidden="true" /> Спробувати знову</Button>
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+
+          <CardFooter className="flex-col items-stretch gap-2">
+            <AttachChips files={files} onChange={(f) => setDraft(active.id, { files: f })} />
+            <Textarea
+              value={text}
+              onChange={(e) => setDraft(active.id, { text: e.target.value })}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
+              rows={2}
+              maxLength={8000}
+              placeholder="Напиши агентові… (Enter — надіслати, Shift+Enter — новий рядок; скріншот можна вставити Ctrl+V)"
+              aria-label="Повідомлення агентові"
+              className="min-h-14 resize-none"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <AttachButton files={files} rules={rules} onChange={(f) => setDraft(active.id, { files: f })} onProblem={(message) => onResult({ ok: false, error: message })} disabled={running} />
+              <ToggleGroup
+                type="single"
+                size="sm"
+                variant="outline"
+                value={mode}
+                onValueChange={(v) => {
+                  if (v !== 'auto' && v !== 'claude' && v !== 'agy') return;
+                  void act({ op: 'mode', chat: active.id, mode: v });
+                }}
+                aria-label="Хто відповідає"
+              >
+                <ToggleGroupItem value="auto" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Авто</ToggleGroupItem>
+                <ToggleGroupItem value="claude" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Claude</ToggleGroupItem>
+                <ToggleGroupItem value="agy" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Antigravity</ToggleGroupItem>
+              </ToggleGroup>
+              {mode !== 'auto' && (
+                <Select
+                  value={chosenModel ?? DEFAULT_MODEL}
+                  onValueChange={(v) => void act({ op: 'model', chat: active.id, agent: mode, model: v === DEFAULT_MODEL ? '' : v })}
+                  disabled={running}
+                >
+                  <SelectTrigger size="sm" className="w-52" aria-label="Модель"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={DEFAULT_MODEL}>Модель за замовчуванням</SelectItem>
+                    {chosenModel && !modelList.some((m) => m.id === chosenModel) && <SelectItem value={chosenModel}>{chosenModel}</SelectItem>}
+                    {modelList.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              <Button className="ml-auto" onClick={() => void send()} disabled={sending || running || (!text.trim() && files.length === 0)}>
+                {sending ? <Spinner /> : <Send aria-hidden="true" />} Надіслати
+              </Button>
+            </div>
+          </CardFooter>
+        </>
+      )}
     </Card>
   );
 }

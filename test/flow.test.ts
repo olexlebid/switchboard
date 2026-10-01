@@ -334,13 +334,18 @@ permissions: { agy: { allow: [] } }
     expect(readFileSync(settings, 'utf8')).toBe(ORIGINAL);
   }, 30_000);
 
-  it('refuses to start while another agy run holds the rules', async () => {
-    const { mkdirSync } = await import('node:fs');
+  it('waits for another agy run to release the rules (parallel chats in different projects take turns)', async () => {
+    const { mkdirSync, rmSync } = await import('node:fs');
     mkdirSync(sbHome(), { recursive: true });
-    writeFileSync(join(sbHome(), 'agy-rules-journal.json'), JSON.stringify({ settingsPath: settings, backupPath: '', originalExisted: true, permissionsExisted: false, writtenHash: 'x', added: { allow: [], deny: [] }, pid: process.ppid, project: '/other', startedAt: '' }));
-    await expect(start(input({ agent: 'agy' }), agyCfg())).rejects.toMatchObject({ exitCode: 3 });
-    expect(git('branch', '--list', 'sb/*').split('\n').filter(Boolean).length).toBeLessThanOrEqual(1);
-  });
+    const journal = join(sbHome(), 'agy-rules-journal.json');
+    writeFileSync(journal, JSON.stringify({ settingsPath: settings, backupPath: '', originalExisted: true, permissionsExisted: false, writtenHash: 'x', added: { allow: [], deny: [] }, pid: process.ppid, project: '/other', startedAt: '' }));
+    // the other run finishes shortly after ours started waiting
+    setTimeout(() => rmSync(journal, { force: true }), 2500);
+    const r = await start(input({ agent: 'agy' }), agyCfg());
+    expect(r.task.status).toBe('done');
+    // our own temporary rules are gone again
+    expect(readFileSync(settings, 'utf8')).toBe(ORIGINAL);
+  }, 40_000);
 });
 
 describe('protected paths', () => {

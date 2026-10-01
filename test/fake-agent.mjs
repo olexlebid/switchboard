@@ -23,6 +23,8 @@ const taskId = /Task id: (t-[\w-]+)/.exec(prompt)?.[1] ?? 'unknown';
 const resumeId = args[args.indexOf(style === 'agy' ? '--conversation' : '--resume') + 1];
 const hasSession = args.includes(style === 'agy' ? '--conversation' : '--resume');
 if (process.env.FAKE_PROMPT_DUMP) appendFileSync(process.env.FAKE_PROMPT_DUMP, `=== ${style}\n${prompt}\n`);
+// FAKE_ARGV_DUMP=<file>: one line per run with the model argument (if any), to check `--model`.
+if (process.env.FAKE_ARGV_DUMP) appendFileSync(process.env.FAKE_ARGV_DUMP, `${style} model=${args.includes('--model') ? args[args.indexOf('--model') + 1] : '-'}\n`);
 
 const sessionOut = hasSession ? resumeId : `${style}-${Math.random().toString(36).slice(2, 8)}`;
 function report({ ok = true, denied = [], text = 'done' }) {
