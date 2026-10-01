@@ -1,6 +1,6 @@
 // Tiny JSON store in ~/.switchboard (override with SB_HOME). Chosen over SQLite:
 // one user, small data, no native build; writes are atomic (tmp + rename).
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AgentId, ExhaustedMark, Run, Task, UsageSnapshot } from './types';
@@ -55,11 +55,54 @@ export function writeJsonAtomic(path: string, data: unknown): void {
   chmodSync(path, 0o600);
 }
 
+const LOCK_WAIT_MS = 5000;
+const LOCK_STALE_MS = 15_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Cross-process lock around read-modify-write of state.json (the dashboard and several `sb`
+ * processes write to it). Plain O_EXCL lock file; a lock older than LOCK_STALE_MS belongs to a
+ * crashed process and is taken over.
+ */
+function withStateLock<T>(fn: () => T): T {
+  mkdirSync(sbHome(), { recursive: true, mode: 0o700 });
+  const lock = `${statePath()}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let fd: number;
+  for (;;) {
+    try {
+      fd = openSync(lock, 'wx', 0o600);
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          unlinkSync(lock);
+          continue;
+        }
+      } catch { /* the holder just released it */ }
+      if (Date.now() > deadline) throw new Error('state.json is locked by another process (timeout)');
+      sleepSync(10 + Math.floor(Math.random() * 15));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try { unlinkSync(lock); } catch { /* already gone */ }
+  }
+}
+
 export function updateState(fn: (s: State) => void): State {
-  const s = readState();
-  fn(s);
-  writeJsonAtomic(statePath(), s);
-  return s;
+  return withStateLock(() => {
+    const s = readState();
+    fn(s);
+    writeJsonAtomic(statePath(), s);
+    return s;
+  });
 }
 
 export function saveSnapshot(snap: UsageSnapshot): void {

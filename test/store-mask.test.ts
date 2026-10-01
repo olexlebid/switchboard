@@ -43,3 +43,27 @@ describe('mask', () => {
     expect(out).not.toMatch(/abc\.def|sk-ant|supersecretvalue/);
   });
 });
+
+describe('state.json locking', () => {
+  it('does not lose updates when several processes write at the same time', async () => {
+    const { spawn } = await import('node:child_process');
+    const script = join(import.meta.dirname, 'helpers/state-writer.ts');
+    const run = () => new Promise<number>((resolve) => {
+      const c = spawn(process.execPath, ['--import', 'tsx', script, '40'], { env: { ...process.env, SB_HOME: dir }, cwd: join(import.meta.dirname, '..'), stdio: 'ignore' });
+      c.on('exit', (code) => resolve(code ?? 1));
+    });
+    const codes = await Promise.all([run(), run(), run(), run(), run(), run()]);
+    expect(codes).toEqual([0, 0, 0, 0, 0, 0]);
+    expect((readState().meta as Record<string, unknown>).counter).toBe(240);
+  }, 60_000);
+
+  it('takes over a stale lock left by a crashed process', async () => {
+    const { writeFileSync: wf, utimesSync } = await import('node:fs');
+    const lock = join(dir, 'state.json.lock');
+    wf(lock, '');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    saveSnapshot({ agent: 'claude', source: 'cli', capturedAt: '2026-10-01T00:00:00Z' });
+    expect(readState().snapshots.claude).toBeDefined();
+  });
+});
