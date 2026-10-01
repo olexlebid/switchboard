@@ -125,7 +125,7 @@ export function ChatPanel({ project, projectName, chat, rules, now, onResult, re
               </SelectContent>
             </Select>
           )}
-          <Button variant="outline" size="sm" disabled={running || sending} onClick={() => void act({ op: 'new', project, mode })}>
+          <Button variant="outline" size="sm" disabled={running || sending || (active?.messages.length ?? 1) === 0} title={active && active.messages.length === 0 ? 'Поточний чат ще порожній' : undefined} onClick={() => void act({ op: 'new', project, mode })}>
             <MessageSquarePlus aria-hidden="true" /> Новий чат
           </Button>
         </CardAction>
@@ -191,9 +191,9 @@ export function ChatPanel({ project, projectName, chat, rules, now, onResult, re
             }}
             aria-label="Хто відповідає"
           >
-            <ToggleGroupItem value="auto">Авто</ToggleGroupItem>
-            <ToggleGroupItem value="claude">Claude</ToggleGroupItem>
-            <ToggleGroupItem value="agy">Antigravity</ToggleGroupItem>
+            <ToggleGroupItem value="auto" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Авто</ToggleGroupItem>
+            <ToggleGroupItem value="claude" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Claude</ToggleGroupItem>
+            <ToggleGroupItem value="agy" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Antigravity</ToggleGroupItem>
           </ToggleGroup>
           <Button className="ml-auto" onClick={() => void send()} disabled={sending || running || (!text.trim() && files.length === 0)}>
             {sending ? <Spinner /> : <Send aria-hidden="true" />} Надіслати

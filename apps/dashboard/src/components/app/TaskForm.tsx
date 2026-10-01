@@ -93,7 +93,7 @@ export function TaskForm({ project, projectName, types, rules, onResult, reload 
             <Field>
               <FieldLabel>Файли <span className="font-normal text-muted-foreground">(скріншоти, PDF, документи)</span></FieldLabel>
               <div className="flex flex-wrap items-center gap-2">
-                <AttachButton files={files} rules={rules} onChange={setFiles} onProblem={problem} />
+                <AttachButton files={files} rules={rules} onChange={setFiles} onProblem={problem} label="Додати файли" />
                 <AttachChips files={files} onChange={setFiles} />
               </div>
               <FieldDescription>Не більше {rules.maxFiles} файлів, до {rules.maxFileMB} МБ кожен. Можна перетягнути сюди.</FieldDescription>

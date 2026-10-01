@@ -34,10 +34,12 @@ type Props = {
   onChange: (files: File[]) => void;
   onProblem: (message: string) => void;
   disabled?: boolean;
+  /** Show a text label next to the icon (forms); chat uses the compact icon-only button. */
+  label?: string;
 };
 
 /** The "attach" button with its hidden input; chips are rendered by <AttachChips />. */
-export function AttachButton({ files, rules, onChange, onProblem, disabled }: Props) {
+export function AttachButton({ files, rules, onChange, onProblem, disabled, label }: Props) {
   const input = useRef<HTMLInputElement>(null);
   return (
     <>
@@ -54,8 +56,17 @@ export function AttachButton({ files, rules, onChange, onProblem, disabled }: Pr
           e.target.value = '';
         }}
       />
-      <Button type="button" variant="ghost" size="icon" disabled={disabled} onClick={() => input.current?.click()} aria-label="Додати файли" title="Додати файли (можна перетягнути або вставити скріншот)">
+      <Button
+        type="button"
+        variant={label ? 'outline' : 'ghost'}
+        size={label ? 'sm' : 'icon'}
+        disabled={disabled}
+        onClick={() => input.current?.click()}
+        aria-label="Додати файли"
+        title="Додати файли (можна перетягнути або вставити скріншот)"
+      >
         <Paperclip aria-hidden="true" />
+        {label}
       </Button>
     </>
   );

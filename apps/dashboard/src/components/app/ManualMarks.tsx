@@ -25,8 +25,8 @@ export function ManualMarks({ cards, onChange }: Props) {
             value={card.state ?? ''}
             onValueChange={(v) => { if (v === 'available' || v === 'exhausted') onChange(card.id, v); }}
           >
-            <ToggleGroupItem value="available">Доступно</ToggleGroupItem>
-            <ToggleGroupItem value="exhausted">Вичерпано</ToggleGroupItem>
+            <ToggleGroupItem value="available" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Доступно</ToggleGroupItem>
+            <ToggleGroupItem value="exhausted" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Вичерпано</ToggleGroupItem>
           </ToggleGroup>
           {card.at && (
             <time className="text-xs text-muted-foreground" dateTime={card.at}>

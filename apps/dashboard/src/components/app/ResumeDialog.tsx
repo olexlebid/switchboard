@@ -54,7 +54,7 @@ export function ResumeDialog({ task, rules, onResult, reload }: Props) {
           <Textarea id={`note-${task.id}`} value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={5000} placeholder="Наприклад: брейкпоінт планшета — 1024px, акцентний колір з tokens.css" />
         </Field>
         <div className="flex flex-wrap items-center gap-2">
-          <AttachButton files={files} rules={rules} onChange={setFiles} onProblem={problem} />
+          <AttachButton files={files} rules={rules} onChange={setFiles} onProblem={problem} label="Додати файли" />
           <AttachChips files={files} onChange={setFiles} />
         </div>
         <DialogFooter>
