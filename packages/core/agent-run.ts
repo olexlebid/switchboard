@@ -18,6 +18,8 @@ export type AgentRunInput = {
   sessionId?: string;
   /** `--model` for this run; empty = the agent's own default. */
   model?: string;
+  /** Only reading tools are allowed (no file writes, no shell). */
+  readOnly?: boolean;
   say: (s: string) => void;
   warnings: string[];
   /** Extra text for the first log header line, e.g. "(continuation)". */
@@ -29,12 +31,16 @@ export type AgentRunResult = { proc: ProcessResult; outcome: Outcome; logPath: s
 
 export async function runAgentOnce(input: AgentRunInput): Promise<AgentRunResult> {
   const { cfg, agent, project, prompt, runId, timeoutMs, say, warnings } = input;
-  const args = buildAgentArgs(agent, cfg.agents[agent], prompt, cfg.permissions[agent], timeoutMs, input.sessionId, input.model);
+  // Read-only runs get a fixed minimal tool set instead of the configured allow/deny lists.
+  const rules = input.readOnly
+    ? { allow: ['Read', 'Glob', 'Grep'], deny: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'], args: cfg.permissions[agent].args }
+    : cfg.permissions[agent];
+  const args = buildAgentArgs(agent, cfg.agents[agent], prompt, rules, timeoutMs, input.sessionId, input.model);
   const logPath = logPathFor(runId);
 
   // agy takes permissions only from its user-level settings: add a directory-scoped rule for this run.
-  let rules: AgyRuleHandle | undefined;
-  if (agent === 'agy' && cfg.permissions.agy.allow.length > 0) {
+  let agyRules: AgyRuleHandle | undefined;
+  if (agent === 'agy' && !input.readOnly && cfg.permissions.agy.allow.length > 0) {
     // agy keeps its rules in one shared settings file, so parallel agy runs (other projects) take turns.
     const deadline = Date.now() + timeoutMs;
     let announced = false;
@@ -44,7 +50,7 @@ export async function runAgentOnce(input: AgentRunInput): Promise<AgentRunResult
         if (recovered) warnings.push(recovered);
         const real = realpathSync(project);
         const fill = (list: string[]) => list.map((r) => r.replaceAll('{project}', real));
-        rules = applyAgyRules({
+        agyRules = applyAgyRules({
           settingsPath: cfg.agents.agy.settingsPath ?? DEFAULT_AGY_SETTINGS,
           project: real,
           allow: fill(cfg.permissions.agy.allow),
@@ -77,9 +83,9 @@ export async function runAgentOnce(input: AgentRunInput): Promise<AgentRunResult
     });
   } finally {
     // Always take the temporary agy rules away again, also after a timeout or an error.
-    if (rules) {
+    if (agyRules) {
       try {
-        rules.restore();
+        agyRules.restore();
       } catch (e) {
         warnings.push(`Не вдалося зняти тимчасові правила agy: ${(e as Error).message}`);
       }

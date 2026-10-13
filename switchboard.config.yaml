@@ -123,3 +123,9 @@ notifications:
 
 chat:
   order: [claude, agy]    # which agent answers first in "Авто" mode (a chat keeps its last agent while it has room)
+
+api:                      # `sb api`: JSON service for Make (see README, "API для Make"); listens on 127.0.0.1 only
+  port: 4322
+  maxConcurrent: 3        # simultaneous prompts (queued or running)
+  rateLimitPerMin: 60     # requests per minute per token
+  allowWrite: true        # false: requests with "write": true are refused

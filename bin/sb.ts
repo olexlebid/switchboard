@@ -8,6 +8,8 @@ import { runDashboard } from '../packages/core/dashboard';
 import { resumeTask, SbError, startTask, type StartResult } from '../packages/core/flow';
 import { addUserMessage, createChat, runChatTurn, setChatMode } from '../packages/core/chat';
 import { mergeFor, previewMergeFor, type MergeKind } from '../packages/core/launch';
+import { startApiServer } from '../packages/core/api-server';
+import { createApiToken, tokenPath } from '../packages/core/api-token';
 import { initProject } from '../packages/core/init';
 import { notify } from '../packages/core/notify';
 import { getOverview } from '../packages/core/overview';
@@ -34,6 +36,8 @@ const HELP = `Switchboard
   resume <id> [--agent ...] [--note "відповідь агенту"]   продовжити задачу, що чекає, заблокована або впала
   merge <id> [--yes]           влити гілку задачі (t-…) або чату (c-…) у main: без --yes лише показує, що буде влито;
                                з --yes робить git merge --ff-only. Без push і деплою. Запускай лише за прямим проханням власника.
+  api [--port N]               публічний JSON API для Make (лише /v1/*, Bearer-токен, 127.0.0.1; тунель вказуй на цей порт)
+  api token [--rotate]         створити токен API (~/.switchboard/api-token); --rotate замінює наявний
   unblock claude|agy           зняти позначку «ліміт вичерпано» (якщо вона хибна)
   project add|remove|list      проєкти, у яких дешборд може запускати задачі (проєкти з sb run додаються самі)
   notify-test                  перевірити системне сповіщення (macOS)
@@ -238,6 +242,33 @@ async function mergeCommand(argv: string[]): Promise<number> {
   return 0;
 }
 
+async function apiCommand(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  if (sub === 'token') {
+    const { values } = parseArgs({ args: rest, options: { rotate: { type: 'boolean' } } });
+    const token = createApiToken({ rotate: values.rotate });
+    if (token) {
+      console.log(`Токен API (покажу лише зараз, збережено в ${tokenPath()}):\n\n${token}\n\nВставляй його в Make як заголовок Authorization: Bearer <токен>.`);
+    } else {
+      console.log(`Токен уже є: ${tokenPath()} (права 0600). Показати: cat "${tokenPath()}". Замінити: sb api token --rotate`);
+    }
+    return 0;
+  }
+  const { values } = parseArgs({ args: argv, options: { port: { type: 'string' } } });
+  const cfg = loadConfig();
+  try {
+    const server = await startApiServer(cfg, { port: values.port ? Number(values.port) : undefined });
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : cfg.api.port;
+    console.log(`Switchboard API: http://127.0.0.1:${port}/v1  (Ctrl+C щоб зупинити)`);
+    console.log('Назовні — лише через тунель, спрямований на цей порт (див. README, «API для Make»).');
+  } catch (e) {
+    console.error((e as Error).message);
+    return 1;
+  }
+  return await new Promise<number>(() => { /* serve until the process is stopped */ });
+}
+
 async function main(): Promise<number> {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
@@ -278,6 +309,8 @@ async function main(): Promise<number> {
       return resume(rest);
     case 'merge':
       return mergeCommand(rest);
+    case 'api':
+      return apiCommand(rest);
     case 'project': {
       const [sub, path] = rest;
       const { realpathSync, statSync } = await import('node:fs');

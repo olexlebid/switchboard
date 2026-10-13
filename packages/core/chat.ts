@@ -50,7 +50,7 @@ function expandHome(p: string): string {
 
 /** Creates an empty chat for a project. The branch is created lazily by the first turn. */
 export async function createChat(
-  input: { project: string; mode?: 'auto' | AgentId; title?: string },
+  input: { project: string; mode?: 'auto' | AgentId; title?: string; readOnly?: boolean; source?: 'api'; models?: Partial<Record<AgentId, string>> },
   now = new Date(),
 ): Promise<Chat> {
   const project = expandHome(input.project);
@@ -65,6 +65,9 @@ export async function createChat(
     baseBranch: await currentBranch(project),
     baseSha: await headSha(project),
     mode: input.mode ?? 'auto',
+    ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.source ? { source: input.source } : {}),
+    ...(input.models ? { models: input.models } : {}),
     sessions: {},
     messages: [],
     status: 'idle',
@@ -119,11 +122,11 @@ export function setChatMode(chatId: string, mode: 'auto' | AgentId): void {
 
 // ---------------------------------------------------------------- prompts
 
-const RULES = (chat: Chat, agent: AgentId, existing: string[]) => `You are chatting with the user about a web project (Astro) through an automated orchestrator. You can read and edit files in this project directory. The current git branch is ${chat.branch}.
+const RULES = (chat: Chat, agent: AgentId, existing: string[]) => `You are chatting with the user about a web project (Astro) through an automated orchestrator. ${chat.readOnly ? 'You can only READ files in this project directory; you must not create, edit or delete anything.' : `You can read and edit files in this project directory. The current git branch is ${chat.branch}.`}
 ${existing.length ? `Read these project files first (they exist): ${existing.join(', ')}.\n` : ''}${agent === 'agy' ? 'You have NO shell access: do not run shell commands. Read and write files with your file tools only.\n' : ''}
 Hard rules:
 - Work only inside this project directory.
-- Do NOT run git commit, push, merge, rebase, reset, checkout or deploy. The orchestrator commits your edits after each reply.
+${chat.readOnly ? '- READ-ONLY: do not write any file and do not run any command; answer from what you read.\n' : ''}- Do NOT run git commit, push, merge, rebase, reset, checkout or deploy. The orchestrator commits your edits after each reply.
 - Do NOT install or remove dependencies and do NOT edit netlify.toml.
 - Do not read or print secrets (.env files, tokens).
 - You have NO network access: never open URLs or fetch web pages (no read_url, web fetch, curl). Links in project files, Figma links included, cannot be opened here: work from the attached screenshots and the text you were given, and if a frame is missing, ask the user to attach a screenshot.
@@ -188,11 +191,13 @@ export async function runChatTurn(
   const project = first.project;
   const warnings: string[] = [];
 
+  // A read-only chat (public API) never touches the working tree: no branch switch, no commit, no tree guard.
+  const readOnly = first.readOnly === true;
   // Another chat or task of this project must not share the working tree at the same time.
-  const clash = busyWith(project, chatId);
+  const clash = readOnly ? undefined : busyWith(project, chatId);
   if (clash) throw new SbError(`У проєкті вже працює ${clash}. Дочекайся завершення.`, 3);
-  const returnTo = await currentBranch(project);
-  if (returnTo !== first.branch) {
+  const returnTo = readOnly ? undefined : await currentBranch(project);
+  if (!readOnly && returnTo !== first.branch) {
     const dirty = await blockingDirtyFiles(project);
     if (dirty.length > 0) {
       throw new SbError(`Робоче дерево проєкту не чисте (${dirty.length} змін: ${summarizeDirty(dirty)}). Закоміть або відклади зміни, тоді повтори.`, 3);
@@ -209,7 +214,8 @@ export async function runChatTurn(
     const chat = readState().chats[chatId];
     if (!chat || chat.pid !== process.pid) return;
     const git = (...a: string[]) => spawnSync('git', a, { cwd: project, encoding: 'utf8' });
-    if (git('status', '--porcelain').stdout.trim()) {
+    // a read-only turn has nothing of its own to checkpoint (the tree is the user's)
+    if (!readOnly && git('status', '--porcelain').stdout.trim()) {
       const identity = git('config', 'user.email').stdout.trim() ? [] : ['-c', 'user.name=Switchboard', '-c', 'user.email=switchboard@localhost'];
       git(...STAGE_ARGS);
       git(...identity, 'commit', '-m', `wip(sb): chat ${chatId} interrupted`);
@@ -225,7 +231,7 @@ export async function runChatTurn(
 
   let result: TurnResult = { chat: first, ok: false, files: [], warnings };
   try {
-    if ((await currentBranch(project)) !== first.branch) await checkoutBranch(project, first.branch);
+    if (!readOnly && (await currentBranch(project)) !== first.branch) await checkoutBranch(project, first.branch);
     const before = await headSha(project);
     const existing = RULE_FILES.filter((f) => existsSync(resolve(project, f)));
 
@@ -268,7 +274,7 @@ export async function runChatTurn(
       const attempt = async (sid?: string) => {
         const prompt = buildChatPrompt(chat, message, agent, existing, Boolean(sid));
         say(`▶ ${agent}${sid ? ' (сесія триває)' : ''}: ${oneLine(message.text, 70)}`);
-        return runAgentOnce({ cfg, agent, project, prompt, runId, timeoutMs, sessionId: sid, model: chat.models?.[agent], say, warnings, now, logNote: `chat=${chatId} branch=${chat.branch}` });
+        return runAgentOnce({ cfg, agent, project, prompt, runId, timeoutMs, sessionId: sid, model: chat.models?.[agent], readOnly, say, warnings, now, logNote: `chat=${chatId} branch=${chat.branch}` });
       };
       let { proc, outcome, logPath } = await attempt(sessionId);
       // A lost session (for example after the agent's own cleanup): start over with the transcript.
@@ -336,7 +342,7 @@ export async function runChatTurn(
     unregister();
     updateChat(chatId, (c) => { if (c.pid === process.pid) { c.pid = undefined; if (c.status === 'running') c.status = 'idle'; } });
     try {
-      if ((await currentBranch(project)) !== returnTo) await switchBack(project, returnTo);
+      if (!readOnly && returnTo && (await currentBranch(project)) !== returnTo) await switchBack(project, returnTo);
     } catch (e) {
       warnings.push(`не вдалося повернутися на ${returnTo}: ${(e as Error).message}`);
     }
@@ -358,8 +364,12 @@ async function finish(
 ): Promise<TurnResult> {
   const chat = readState().chats[chatId]!;
   const title = oneLine(chat.messages.find((m) => m.id === messageId)?.text ?? 'chat', 60);
-  await commitAll(project, f.ok ? `chat(sb): ${title} [${chatId}]` : `wip(sb): chat ${chatId} checkpoint from ${f.agent}`);
-  const files = await changedFiles(project, before);
+  if (chat.readOnly) {
+    // nothing is committed or reported as changed: the agent had no right to write
+  } else {
+    await commitAll(project, f.ok ? `chat(sb): ${title} [${chatId}]` : `wip(sb): chat ${chatId} checkpoint from ${f.agent}`);
+  }
+  const files = chat.readOnly ? [] : await changedFiles(project, before);
   const touched = protectedTouched(files, cfg.git.protectedPaths);
   if (touched.length > 0) warnings.push(`Агент змінив захищені файли (${touched.join(', ')}): гілку не буде запушено, перевір diff.`);
   if (cfg.git.pushBranches && files.length > 0 && touched.length === 0) {
@@ -403,6 +413,8 @@ export function busyWith(project: string, exceptChatId?: string): string | undef
     if (t.project === project && t.pid && (t.status === 'running' || t.status === 'queued') && alive(t.pid)) return `задача ${t.id}`;
   }
   for (const c of Object.values(s.chats)) {
+    // read-only (API) chats do not hold the working tree
+    if (c.readOnly) continue;
     if (c.id !== exceptChatId && c.project === project && c.pid && c.pid !== process.pid && c.status === 'running' && alive(c.pid)) return `чат ${c.title}`;
   }
   return undefined;

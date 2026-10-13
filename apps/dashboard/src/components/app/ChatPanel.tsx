@@ -189,10 +189,15 @@ export function ChatPanel({ chat, tabs, activeId, projects, models, rules, now, 
           <CardHeader>
             <CardTitle><h2 className="line-clamp-1 text-base font-medium" title={active.title}>{active.projectName} · {active.title}</h2></CardTitle>
             <CardDescription>
-              Гілка <code className="rounded bg-muted px-1">{active.branch}</code> · у {active.baseBranch} потрапляє лише після твого «Влити»
+              {active.readOnly ? (
+                <>Лише відповідь: файли не змінюються, гілки немає</>
+              ) : (
+                <>Гілка <code className="rounded bg-muted px-1">{active.branch}</code> · у {active.baseBranch} потрапляє лише після твого «Влити»</>
+              )}
+              {active.source === 'api' && <Badge variant="secondary" className="ml-2">API</Badge>}
             </CardDescription>
             <CardAction className="flex items-center gap-2">
-              {active.messages.some((m) => m.role === 'agent') && (
+              {!active.readOnly && active.messages.some((m) => m.role === 'agent') && (
                 <Button variant="outline" size="sm" disabled={running || sending} onClick={() => onMerge({ kind: 'chat', id: active.id })}>
                   <GitMerge aria-hidden="true" /> Влити в {active.baseBranch}
                 </Button>

@@ -4,6 +4,8 @@
 //   success  writes a component + PROGRESS.md and reports success
 //   partial  writes a component, then reports a denied Write
 //   denied   writes nothing, reports a denied Write
+//   answer   replies with the user's message and writes nothing (read-only API tests)
+//   slow     like answer, but after 1.5 s
 //   readurl  produces no reply, reports a denied read_url (a link the agent may not open)
 //   hang     never finishes (also spawns a child shell to test process-group kill)
 //   error    prints to stderr and exits 1
@@ -25,6 +27,9 @@ const hasSession = args.includes(style === 'agy' ? '--conversation' : '--resume'
 if (process.env.FAKE_PROMPT_DUMP) appendFileSync(process.env.FAKE_PROMPT_DUMP, `=== ${style}\n${prompt}\n`);
 // FAKE_ARGV_DUMP=<file>: one line per run with the model argument (if any), to check `--model`.
 if (process.env.FAKE_ARGV_DUMP) appendFileSync(process.env.FAKE_ARGV_DUMP, `${style} model=${args.includes('--model') ? args[args.indexOf('--model') + 1] : '-'}\n`);
+
+// FAKE_ARGS_DUMP=<file>: the full argv of every run as one JSON line (prompt replaced by <prompt>).
+if (process.env.FAKE_ARGS_DUMP) appendFileSync(process.env.FAKE_ARGS_DUMP, `${JSON.stringify({ style, args: args.map((a) => (a === prompt ? '<prompt>' : a)) })}\n`);
 
 const sessionOut = hasSession ? resumeId : `${style}-${Math.random().toString(36).slice(2, 8)}`;
 function report({ ok = true, denied = [], text = 'done' }) {
@@ -121,6 +126,14 @@ switch (mode) {
   case 'denied':
     report({ denied: ['Write'], text: 'Write was denied' });
     break;
+  case 'answer':
+  case 'slow': {
+    const msg = (prompt.split('USER MESSAGE:\n\n')[1] ?? prompt).split('\n')[0];
+    const text = msg.includes('SECRET') ? `key ghp_${'a'.repeat(30)} in ${process.cwd()}/src` : `Відповідь: ${msg}`;
+    if (mode === 'slow') setTimeout(() => report({ text }), 1500);
+    else report({ text });
+    break;
+  }
   case 'readurl':
     report({ denied: ['read_url'], text: '' });
     break;

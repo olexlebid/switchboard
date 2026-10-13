@@ -62,7 +62,7 @@ export function TaskPanel({ tasks, chats, rules, now, onResult, onMerge, onOpenC
       <ItemContent>
         <ItemTitle>{extra} <span className="truncate">{c.title}</span></ItemTitle>
         <ItemDescription>
-          Чат · {c.agentTitle ?? 'агент обирається'} · {c.projectName}
+          {c.source === 'api' ? (c.readOnly ? 'API · лише відповідь' : 'API · зі змінами') : 'Чат'} · {c.agentTitle ?? 'агент обирається'} · {c.projectName}
           {c.status === 'running' && c.runningSince ? ` · триває ${formatDuration(now - Date.parse(c.runningSince))}` : ''}
           {c.status === 'waiting' && c.waitUntil ? ` · ${Date.parse(c.waitUntil) > now ? `старт через ${formatDuration(Date.parse(c.waitUntil) - now)}` : 'уже можна повторити'}` : ''}
         </ItemDescription>

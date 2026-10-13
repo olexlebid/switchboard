@@ -118,6 +118,12 @@ export function parseConfig(text: string): SwitchboardConfig {
     },
     handoff: { maxHandoffs: num(raw.handoff?.maxHandoffs, 'handoff.maxHandoffs', 2) },
     notifications: { enabled: raw.notifications?.enabled !== false },
+    api: {
+      port: num(raw.api?.port, 'api.port', 4322),
+      maxConcurrent: num(raw.api?.maxConcurrent, 'api.maxConcurrent', 3),
+      rateLimitPerMin: num(raw.api?.rateLimitPerMin, 'api.rateLimitPerMin', 60),
+      allowWrite: raw.api?.allowWrite !== false,
+    },
     chat: {
       order: ((): AgentId[] => {
         const o = raw.chat?.order ?? ['claude', 'agy'];

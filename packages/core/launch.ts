@@ -210,14 +210,22 @@ export function setChatModelFromDashboard(cfg: SwitchboardConfig, chatId: string
 }
 
 /** Adds the user's message (with files) and starts a detached `sb chat-turn` for it. */
-export async function sendChatMessage(cfg: SwitchboardConfig, chatId: string, text: string, files?: IncomingFile[]): Promise<LaunchResult> {
+export async function sendChatMessage(
+  cfg: SwitchboardConfig,
+  chatId: string,
+  text: string,
+  files?: IncomingFile[],
+  /** Read-only chats (public API) do not use the working tree, so the busy/dirty-tree guards are skipped. */
+  opts: { readOnly?: boolean } = {},
+): Promise<LaunchResult> {
   const chat = readState().chats[chatId];
   if (!chat) return fail('Чату не існує.', 404);
   if (!matchAllowedProject(cfg, chat.project)) return fail('Проєкт чату недоступний.', 409);
   if (chat.status === 'running') return fail('Агент ще відповідає.', 409);
-  if (busyWith(chat.project, chatId)) return fail('У цьому проєкті вже виконується задача або інший чат.', 409);
+  const readOnly = opts.readOnly ?? chat.readOnly === true;
+  if (!readOnly && busyWith(chat.project, chatId)) return fail('У цьому проєкті вже виконується задача або інший чат.', 409);
   // Checked before the message is stored, so a blocked send leaves no stale "pending" message behind.
-  const blocked = await treeBlock(chat.project, chat.branch);
+  const blocked = readOnly ? undefined : await treeBlock(chat.project, chat.branch);
   if (blocked) return blocked;
   const up = await storeUploads(chat.project, files);
   if (up.error) return fail(up.error);

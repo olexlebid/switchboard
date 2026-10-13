@@ -22,6 +22,9 @@ export type ChatListItem = {
   waitUntil?: string;
   /** First line of the latest agent reply, for the "recent" list. */
   lastReply?: string;
+  /** Public-API chat; `readOnly` ones can only answer (no branch, no commits). */
+  source?: 'api';
+  readOnly?: boolean;
 };
 
 export type ChatMessageView = {
@@ -55,6 +58,8 @@ export type ChatView = {
   lastAgent?: AgentId;
   /** Model chosen per agent in this chat (absent = the agent's default). */
   models: Partial<Record<AgentId, string>>;
+  readOnly?: boolean;
+  source?: 'api';
   canStop: boolean;
   messages: ChatMessageView[];
 };
@@ -71,7 +76,7 @@ function processAlive(pid: number): boolean {
 }
 
 /** A chat stuck in "running" whose process is gone (kill -9, reboot) is freed again. */
-function reconcile(chat: Chat): void {
+export function reconcile(chat: Chat): void {
   if (chat.status !== 'running' || (chat.pid && processAlive(chat.pid))) return;
   updateChat(chat.id, (c) => {
     c.status = 'idle';
@@ -97,6 +102,8 @@ function viewOf(chat: Chat): ChatView {
     runningSince: running ? runningMessage?.at : undefined,
     lastAgent: chat.lastAgent,
     models: chat.models ?? {},
+    readOnly: chat.readOnly,
+    source: chat.source,
     canStop: running && Boolean(chat.pid),
     messages: chat.messages.map((m) => ({
       id: m.id,
@@ -133,6 +140,8 @@ function itemOf(c: Chat): ChatListItem {
     runningSince: running ? c.messages.find((m) => m.role === 'user' && m.status === 'running')?.at : undefined,
     waitUntil: c.waitUntil,
     lastReply: lastAgentMessage ? firstLine(lastAgentMessage.text) : undefined,
+    source: c.source,
+    readOnly: c.readOnly,
   };
 }
 

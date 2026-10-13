@@ -142,6 +142,10 @@ export type Chat = {
   lastAgent?: AgentId;
   /** Model chosen per agent for this chat (`--model`); empty = the agent's own default. */
   models?: Partial<Record<AgentId, string>>;
+  /** API chats that may only answer: no branch switching, no commits, file-writing tools are not allowed. */
+  readOnly?: boolean;
+  /** Where the chat came from; the dashboard marks API chats. */
+  source?: 'api';
   messages: ChatMessage[];
   status: 'idle' | 'running' | 'waiting';
   /** pid of the `sb chat-turn` process while a turn runs. */
@@ -172,4 +176,6 @@ export type SwitchboardConfig = {
   handoff: { maxHandoffs: number };
   notifications: { enabled: boolean };
   chat: { order: AgentId[] };
+  /** The public API (`sb api`): port, throttling and whether `write: true` requests are accepted. */
+  api: { port: number; maxConcurrent: number; rateLimitPerMin: number; allowWrite: boolean };
 };
