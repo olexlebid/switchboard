@@ -14,7 +14,8 @@ agents:
   codex:                             # ChatGPT through the Codex CLI (`npm i -g @openai/codex`, then `codex login` with the ChatGPT account)
     cmd: codex
     headlessArgs: ["exec", "--json"] # the sandbox flags come from permissions.codex.args; the prompt is appended last
-    models: []                       # model ids offered in the chat picker (e.g. one you use in `codex -m`); empty = codex's own default
+    models: [gpt-5.6-luna, gpt-5.6-terra, gpt-6-luna]   # ids offered in the chat picker (from ~/.codex/models_cache.json); empty = codex's own default,
+                                     # which may be a model your ChatGPT plan does not support (then the run fails with a clear error)
 
 limits:
   staleAfterMin: 30       # data older than this is "unknown" (unless a window is exhausted)
