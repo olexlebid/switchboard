@@ -1,12 +1,12 @@
 // ChatGPT (Codex CLI): argv, JSONL output, rate-limit records from the local session logs, config defaults.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig } from '../packages/core/config';
 import { interpretOutput } from '../packages/core/interpret';
 import { detectLimit } from '../packages/core/limit-detect';
-import { fetchCodexUsage, parseCodexRateLimits, toSnapshot } from '../packages/core/limits/codex';
+import { fetchCodexUsage, parseCodexRateLimits, probeCodex, toSnapshot } from '../packages/core/limits/codex';
 import { getModels } from '../packages/core/models';
 import { buildAgentArgs } from '../packages/core/runner';
 import { computeStatus } from '../packages/core/status';
@@ -136,5 +136,30 @@ describe('rate limits from the local session logs', () => {
     const snap = toSnapshot(parseCodexRateLimits(rec('2030-01-01T08:00:00.000Z', { primary: { used_percent: 95, window_minutes: 300, resets_at: 1893488400 } }))!);
     expect(computeStatus(snap, cfg.thresholds, 30, new Date('2030-01-01T08:10:00Z')).status).toBe('exhausted');
     expect(computeStatus(snap, cfg.thresholds, 30, new Date('2030-01-01T09:30:00Z')).status).toBe('unknown');
+  });
+});
+
+describe('probeCodex', () => {
+  const fake = (body: string) => {
+    const bin = join(mkdtempSync(join(tmpdir(), 'sb-fakecodex-')), 'codex');
+    writeFileSync(bin, `#!/bin/sh\n${body}\n`);
+    chmodSync(bin, 0o755);
+    return { ...cfg.agents.codex, cmd: bin };
+  };
+
+  it('sends one read-only turn with the configured model and no web search', async () => {
+    const out = join(mkdtempSync(join(tmpdir(), 'sb-probe-')), 'argv');
+    const agent = fake(`echo "$@" > ${out}`);
+    await probeCodex(agent, ['--sandbox', 'workspace-write', '-c', 'web_search="live"', '-m', 'gpt-x'], 5000);
+    const argv = readFileSync(out, 'utf8');
+    expect(argv).toContain('exec --json --sandbox read-only --skip-git-repo-check');
+    expect(argv).toContain('-m gpt-x');
+    expect(argv).not.toContain('web_search');
+    expect(argv).not.toContain('workspace-write');
+  });
+
+  it('explains a failed probe (logged out, error exit)', async () => {
+    await expect(probeCodex(fake('echo "Not logged in" >&2; exit 1'), [], 5000)).rejects.toThrow(/код 1.*Not logged in/);
+    await expect(probeCodex({ ...cfg.agents.codex, cmd: '/nonexistent/codex' }, [], 5000)).rejects.toThrow(/не запускається/);
   });
 });

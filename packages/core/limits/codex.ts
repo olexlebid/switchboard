@@ -8,9 +8,10 @@
 // (older versions wrote `resets_in_seconds` instead of `resets_at`; both are understood). The snapshot is as fresh as
 // the last Codex turn, so `capturedAt` is the time of that record, not "now".
 import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { UsageSnapshot, UsageWindow } from '../types';
+import { runCommand } from '../exec';
+import type { AgentConfig, UsageSnapshot, UsageWindow } from '../types';
 
 const TAIL_BYTES = 256 * 1024;
 const MAX_FILES = 25;
@@ -117,4 +118,30 @@ export async function fetchCodexUsage(): Promise<UsageSnapshot> {
   }
   if (!best) throw new Error(`no rate-limit records in ${root}: they appear after the first Codex run (codex login, then any request)`);
   return toSnapshot(best);
+}
+
+/** The `-m <model>` / `--model <model>` pair from codex args, if any (the probe must use a model the plan supports). */
+function modelArgs(args: string[]): string[] {
+  const i = args.findIndex((a) => a === '-m' || a === '--model');
+  return i >= 0 && args[i + 1] ? [args[i], args[i + 1]!] as string[] : [];
+}
+
+/**
+ * Live check for the "Оновити" button. Codex has no usage command, so the only way to get a fresh rate-limit record
+ * (and to prove the agent really answers) is one tiny read-only turn: it spends a negligible amount of quota and
+ * writes a new `token_count` record into the session log that fetchCodexUsage() then reads. Rejects with a short
+ * reason when codex is missing, logged out, out of quota or does not answer in time.
+ */
+export async function probeCodex(agent: AgentConfig, modelFlags: string[], timeoutMs: number): Promise<void> {
+  const args = [
+    ...agent.headlessArgs, '--sandbox', 'read-only', '--skip-git-repo-check', '-C', tmpdir(),
+    ...modelArgs(modelFlags), 'Reply with the single word: ok',
+  ];
+  const r = await runCommand(agent.cmd, args, { timeoutMs });
+  if (r.spawnError) throw new Error(`codex не запускається: ${r.spawnError}`);
+  if (r.timedOut) throw new Error(`codex не відповів за ${Math.round(timeoutMs / 1000)} с`);
+  if (r.code !== 0) {
+    const tail = (r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ').slice(0, 300);
+    throw new Error(`codex відповів помилкою (код ${r.code})${tail ? `: ${tail}` : ''}`);
+  }
 }

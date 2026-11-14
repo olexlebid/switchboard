@@ -3,7 +3,7 @@ import { readState, saveSnapshot, updateState } from '../store';
 import type { AgentId, SwitchboardConfig, UsageSnapshot } from '../types';
 import { fetchAgyModelCount, fetchAgyUsage } from './agy';
 import { fetchClaudeUsage } from './claude';
-import { fetchCodexUsage } from './codex';
+import { fetchCodexUsage, probeCodex } from './codex';
 
 export type CollectResult = {
   agent: AgentId;
@@ -24,12 +24,16 @@ async function agyModelCount(cfg: SwitchboardConfig, timeoutMs: number, now: Dat
   return count;
 }
 
-export async function collectUsage(cfg: SwitchboardConfig, now = new Date(), only?: AgentId[]): Promise<CollectResult[]> {
+/** `probe`: also send a tiny live request to agents whose limits are only known from local logs (codex). */
+export async function collectUsage(cfg: SwitchboardConfig, now = new Date(), only?: AgentId[], probe = false): Promise<CollectResult[]> {
   const timeoutMs = cfg.limits.fetchTimeoutSec * 1000;
   const jobs: Record<AgentId, () => Promise<UsageSnapshot>> = {
     claude: () => fetchClaudeUsage(cfg.agents.claude, timeoutMs, now),
     agy: async () => fetchAgyUsage(cfg.agents.agy, timeoutMs, now, await agyModelCount(cfg, timeoutMs, now)),
-    codex: () => fetchCodexUsage(),
+    codex: async () => {
+      if (probe) await probeCodex(cfg.agents.codex, cfg.permissions.codex.args, Math.max(timeoutMs, 90_000));
+      return fetchCodexUsage();
+    },
   };
 
   const ids = (Object.keys(jobs) as AgentId[]).filter((id) => !only || only.includes(id));

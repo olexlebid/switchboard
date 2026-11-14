@@ -39,16 +39,16 @@ export type Overview = {
   manual: ManualCardOverview[];
 };
 
-export type RefreshMode = 'cached' | 'if-stale' | 'force';
+export type RefreshMode = 'cached' | 'if-stale' | 'force' | 'probe';
 
 // Process-wide refresh bookkeeping: one CLI round at a time, shared by all requests.
 let lastRefreshAt = 0;
 let lastErrors: Partial<Record<AgentId, string>> = {};
 let inflight: Promise<void> | null = null;
 
-async function refresh(cfg: SwitchboardConfig): Promise<void> {
+async function refresh(cfg: SwitchboardConfig, probe = false): Promise<void> {
   if (!inflight) {
-    inflight = collectUsage(cfg)
+    inflight = collectUsage(cfg, new Date(), undefined, probe)
       .then((results) => {
         lastErrors = {};
         for (const r of results) if (r.error) lastErrors[r.agent] = r.error;
@@ -97,10 +97,11 @@ export function buildOverview(cfg: SwitchboardConfig, now = new Date(), errors: 
 
 /**
  * Builds the overview. 'if-stale' re-reads the CLIs only when the last read is older than
- * dashboard.refreshTtlSec; 'force' always re-reads; 'cached' never runs a CLI.
+ * dashboard.refreshTtlSec; 'force' always re-reads; 'probe' is 'force' plus a tiny live request to codex (the
+ * dashboard's "Оновити" button); 'cached' never runs a CLI.
  */
 export async function getOverview(mode: RefreshMode = 'if-stale', cfg = loadConfig()): Promise<Overview> {
   const ttlMs = cfg.dashboard.refreshTtlSec * 1000;
-  if (mode === 'force' || (mode === 'if-stale' && Date.now() - lastRefreshAt > ttlMs)) await refresh(cfg);
+  if (mode === 'force' || mode === 'probe' || (mode === 'if-stale' && Date.now() - lastRefreshAt > ttlMs)) await refresh(cfg, mode === 'probe');
   return buildOverview(cfg, new Date(), lastErrors);
 }
