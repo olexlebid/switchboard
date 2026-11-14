@@ -44,11 +44,6 @@ export default function App() {
     if (!openIds.includes(id)) setOpenRaw([...openIds, id].join(','));
     setSelected(id);
   };
-  const closeChat = (id: string) => {
-    const rest = openIds.filter((x) => x !== id);
-    setOpenRaw(rest.join(','));
-    if (activeId === id) setSelected(rest[0] ?? '');
-  };
 
   // First visit: open the most recent chat. After that the user decides which tabs exist (closing all stays closed).
   useEffect(() => {
@@ -154,8 +149,8 @@ export default function App() {
         <div className="h-[44rem]">
           {projects.length > 0 ? (
             <ChatPanel
-              chat={state.chat} tabs={tabs} activeId={activeId} projects={projects} models={state.models} rules={state.uploads} now={now}
-              onResult={show} onMerge={setMergeTarget} onSelect={openChat} onClose={closeChat} onNew={(p) => void newChat(p)} reload={reloadAsync}
+              chat={state.chat} activeId={activeId} projects={projects} models={state.models} rules={state.uploads} now={now}
+              onResult={show} onMerge={setMergeTarget} onSelect={openChat} onNew={(p) => void newChat(p)} reload={reloadAsync}
             />
           ) : (
             <NoProjects />
