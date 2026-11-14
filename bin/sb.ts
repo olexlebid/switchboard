@@ -15,7 +15,7 @@ import { notify } from '../packages/core/notify';
 import { getOverview } from '../packages/core/overview';
 import { addProject, clearExhausted, readState, removeProject } from '../packages/core/store';
 import { formatDuration } from '../packages/core/time';
-import type { AgentId, Run, Task } from '../packages/core/types';
+import { AGENT_IDS, isAgentId, type AgentId, type Run, type Task } from '../packages/core/types';
 
 const HELP = `Switchboard
 
@@ -26,11 +26,11 @@ const HELP = `Switchboard
   hook uninstall               відкотити settings.json до стану до встановлення
   dashboard [--prod] [--port N]  дешборд на http://127.0.0.1:4321 (за замовчуванням dev з hot reload; --prod = збірка і запуск)
   init <проєкт>                створити RULES.md, DESIGN.md, CLAUDE.md, AGENTS.md, .sb/ (існуючі файли не чіпає)
-  run "<задача>" --project <папка> [--type section] [--agent claude|agy] [--priority high]
+  run "<задача>" --project <папка> [--type section] [--agent claude|agy|codex] [--priority high]
                                [--figma <url>] [--timeout <хв>] [--reviews <id задачі>] [--no-handoff]
                                запустити задачу в гілці sb/<id>. Без --agent агента обирає роутер за
                                лімітами; при ліміті задача передається іншому агентові. main і деплой за тобою.
-  chat "<повідомлення>" --project <папка> [--agent claude|agy|auto] [--new] [--attachments <dir>]
+  chat "<повідомлення>" --project <папка> [--agent claude|agy|codex|auto] [--new] [--attachments <dir>]
                                чат з агентом у терміналі (та сама розмова, що в дашборді; правки йдуть у гілку sb/c-…)
   queue [--run-due]            список задач; --run-due продовжує ті, що чекали скидання ліміту й уже можуть іти
   resume <id> [--agent ...] [--note "відповідь агенту"]   продовжити задачу, що чекає, заблокована або впала
@@ -38,7 +38,7 @@ const HELP = `Switchboard
                                з --yes робить git merge --ff-only. Без push і деплою. Запускай лише за прямим проханням власника.
   api [--port N]               публічний JSON API для Make (лише /v1/*, Bearer-токен, 127.0.0.1; тунель вказуй на цей порт)
   api token [--rotate]         створити токен API (~/.switchboard/api-token); --rotate замінює наявний
-  unblock claude|agy           зняти позначку «ліміт вичерпано» (якщо вона хибна)
+  unblock claude|agy|codex     зняти позначку «ліміт вичерпано» (якщо вона хибна)
   project add|remove|list      проєкти, у яких дешборд може запускати задачі (проєкти з sb run додаються самі)
   notify-test                  перевірити системне сповіщення (macOS)
 `;
@@ -98,10 +98,10 @@ async function run(argv: string[]): Promise<number> {
   });
   const text = positionals.join(' ').trim();
   if (!text || !values.project) {
-    console.error('Використання: sb run "<задача>" --project <папка> [--type section] [--agent claude|agy]');
+    console.error('Використання: sb run "<задача>" --project <папка> [--type section] [--agent claude|agy|codex]');
     return 2;
   }
-  if (values.agent && values.agent !== 'claude' && values.agent !== 'agy') throw new SbError('--agent: claude або agy', 2);
+  if (values.agent && !isAgentId(values.agent)) throw new SbError(`--agent: ${AGENT_IDS.join(', ')}`, 2);
   if (values.priority && values.priority !== 'normal' && values.priority !== 'high') throw new SbError('--priority: normal або high', 2);
 
   const r = await startTask(
@@ -131,10 +131,10 @@ async function resume(argv: string[]): Promise<number> {
   });
   const id = positionals[0];
   if (!id) {
-    console.error('Використання: sb resume <id задачі> [--agent claude|agy]');
+    console.error('Використання: sb resume <id задачі> [--agent claude|agy|codex]');
     return 2;
   }
-  if (values.agent && values.agent !== 'claude' && values.agent !== 'agy') throw new SbError('--agent: claude або agy', 2);
+  if (values.agent && !isAgentId(values.agent)) throw new SbError(`--agent: ${AGENT_IDS.join(', ')}`, 2);
   const r = await resumeTask(id, loadConfig(), (line) => console.log(line), {}, {
     agent: values.agent as AgentId | undefined,
     timeoutMin: values.timeout ? Number(values.timeout) : undefined,
@@ -198,10 +198,10 @@ async function chatCommand(argv: string[]): Promise<number> {
   });
   const text = positionals.join(' ').trim();
   if (!text || !values.project) {
-    console.error('Використання: sb chat "<повідомлення>" --project <папка> [--agent claude|agy|auto] [--new]');
+    console.error('Використання: sb chat "<повідомлення>" --project <папка> [--agent claude|agy|codex|auto] [--new]');
     return 2;
   }
-  if (values.agent && !['claude', 'agy', 'auto'].includes(values.agent)) throw new SbError('--agent: claude, agy або auto', 2);
+  if (values.agent && values.agent !== 'auto' && !isAgentId(values.agent)) throw new SbError(`--agent: ${AGENT_IDS.join(', ')} або auto`, 2);
   const { realpathSync } = await import('node:fs');
   const project = realpathSync(values.project.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'));
   const state = readState();
@@ -348,8 +348,8 @@ async function main(): Promise<number> {
     }
     case 'unblock': {
       const agent = rest[0];
-      if (agent !== 'claude' && agent !== 'agy') {
-        console.error('Використання: sb unblock claude|agy  (знімає позначку «ліміт вичерпано», якщо вона хибна)');
+      if (!isAgentId(agent)) {
+        console.error('Використання: sb unblock claude|agy|codex  (знімає позначку «ліміт вичерпано», якщо вона хибна)');
         return 2;
       }
       clearExhausted(agent);

@@ -1,5 +1,5 @@
 // One agent: identity, status, two usage windows, per-model-group rows (collapsed) and a footer.
-import { ChevronDown, Sparkles, Triangle } from 'lucide-react';
+import { Bot, ChevronDown, Sparkles, Triangle } from 'lucide-react';
 import { formatAge } from '@core/time';
 import type { AgentOverview } from '@core/overview';
 import type { GroupWindow, Thresholds } from '@core/types';
@@ -20,7 +20,7 @@ export function AgentCard({ agent, thresholds, now }: Props) {
     entry[g.window] = g;
     groups.set(g.group, entry);
   }
-  const Icon = agent.agent === 'claude' ? Sparkles : Triangle;
+  const Icon = agent.agent === 'claude' ? Sparkles : agent.agent === 'codex' ? Bot : Triangle;
   const age = snapshot ? formatAge(now - Date.parse(snapshot.capturedAt)) : undefined;
 
   return (

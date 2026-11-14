@@ -42,6 +42,8 @@ export function getModels(cfg: SwitchboardConfig): Record<AgentId, ModelOption[]
   return {
     claude: (cfg.agents.claude.models.length ? cfg.agents.claude.models : DEFAULT_CLAUDE_MODELS).map((id) => ({ id, label: id })),
     agy: cached?.list ?? [],
+    // codex has no way to list models non-interactively: the picker offers what agents.codex.models lists.
+    codex: cfg.agents.codex.models.map((id) => ({ id, label: id })),
   };
 }
 

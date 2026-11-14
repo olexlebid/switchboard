@@ -3,6 +3,7 @@ import { readState, saveSnapshot, updateState } from '../store';
 import type { AgentId, SwitchboardConfig, UsageSnapshot } from '../types';
 import { fetchAgyModelCount, fetchAgyUsage } from './agy';
 import { fetchClaudeUsage } from './claude';
+import { fetchCodexUsage } from './codex';
 
 export type CollectResult = {
   agent: AgentId;
@@ -28,6 +29,7 @@ export async function collectUsage(cfg: SwitchboardConfig, now = new Date(), onl
   const jobs: Record<AgentId, () => Promise<UsageSnapshot>> = {
     claude: () => fetchClaudeUsage(cfg.agents.claude, timeoutMs, now),
     agy: async () => fetchAgyUsage(cfg.agents.agy, timeoutMs, now, await agyModelCount(cfg, timeoutMs, now)),
+    codex: () => fetchCodexUsage(),
   };
 
   const ids = (Object.keys(jobs) as AgentId[]).filter((id) => !only || only.includes(id));

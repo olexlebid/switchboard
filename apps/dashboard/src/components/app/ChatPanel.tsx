@@ -4,7 +4,7 @@ import { Clock, FilePen, GitMerge, History, MessageSquarePlus, RotateCcw, Send, 
 import { useEffect, useRef, useState } from 'react';
 import type { ChatListItem, ChatMessageView, ChatOverview } from '@core/chat-overview';
 import type { UploadRules } from '@core/dashboard-state';
-import type { AgentId, ModelOption } from '@core/types';
+import { isAgentId, type AgentId, type ModelOption } from '@core/types';
 import { formatDuration } from '@core/time';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -262,7 +262,7 @@ export function ChatPanel({ chat, tabs, activeId, projects, models, rules, now, 
                 variant="outline"
                 value={mode}
                 onValueChange={(v) => {
-                  if (v !== 'auto' && v !== 'claude' && v !== 'agy') return;
+                  if (v !== 'auto' && !isAgentId(v)) return;
                   void act({ op: 'mode', chat: active.id, mode: v });
                 }}
                 aria-label="Хто відповідає"
@@ -270,6 +270,7 @@ export function ChatPanel({ chat, tabs, activeId, projects, models, rules, now, 
                 <ToggleGroupItem value="auto" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Авто</ToggleGroupItem>
                 <ToggleGroupItem value="claude" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Claude</ToggleGroupItem>
                 <ToggleGroupItem value="agy" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Antigravity</ToggleGroupItem>
+                <ToggleGroupItem value="codex" className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">ChatGPT</ToggleGroupItem>
               </ToggleGroup>
               {mode !== 'auto' && (
                 <Select

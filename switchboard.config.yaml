@@ -11,6 +11,10 @@ agents:
     usageArgs: ["-p", "/quota"]      # prints per-group quota lines (recon row 16)
     settingsPath: "~/.gemini/antigravity-cli/settings.json"   # where agy reads permissions.allow (recon rounds 4-7)
     models: []                       # agy: the picker lists `agy models` (cached); this field is not used
+  codex:                             # ChatGPT through the Codex CLI (`npm i -g @openai/codex`, then `codex login` with the ChatGPT account)
+    cmd: codex
+    headlessArgs: ["exec", "--json"] # the sandbox flags come from permissions.codex.args; the prompt is appended last
+    models: []                       # model ids offered in the chat picker (e.g. one you use in `codex -m`); empty = codex's own default
 
 limits:
   staleAfterMin: 30       # data older than this is "unknown" (unless a window is exhausted)
@@ -22,12 +26,12 @@ thresholds:               # tuned for Claude Pro (small 5h window)
   weeklyReserve: 75       # weekly above this: only priority=high tasks
 
 routing:
-  research: [agy, claude]
-  ideas:    [agy, claude]
-  copy:     [claude, agy]
-  section:  [claude, agy]
-  review:   [agy, claude]
-  qa:       [agy, claude]
+  research: [agy, claude, codex]
+  ideas:    [agy, claude, codex]
+  copy:     [claude, agy, codex]
+  section:  [claude, agy, codex]
+  review:   [agy, claude, codex]
+  qa:       [agy, claude, codex]
 
 dashboard:
   refreshTtlSec: 60       # the dashboard re-reads limits at most this often while it is open
@@ -94,6 +98,12 @@ permissions:
       - "write_file({project}/.env)"
       - "write_file({project}/netlify.toml)"
     args: []
+  codex:
+    # codex has no allow/deny lists: what it may do is the sandbox. workspace-write = write inside the project only,
+    # no network. Read-only chats (the API) use `--sandbox read-only` automatically. Never use danger-full-access here.
+    allow: []
+    deny: []
+    args: ["--sandbox", "workspace-write"]
 
 router:
   shortTypes: [section, copy, qa]     # an agent with status "мало" only takes these
@@ -122,7 +132,7 @@ notifications:
   enabled: true           # macOS system notification on pause (osascript)
 
 chat:
-  order: [claude, agy]    # which agent answers first in "Авто" mode (a chat keeps its last agent while it has room)
+  order: [claude, agy, codex]    # which agent answers first in "Авто" mode (a chat keeps its last agent while it has room)
 
 api:                      # `sb api`: JSON service for Make (see README, "API для Make"); listens on 127.0.0.1 only
   port: 4322

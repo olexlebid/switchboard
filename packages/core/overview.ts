@@ -3,10 +3,10 @@ import { loadConfig } from './config';
 import { collectUsage } from './limits';
 import { computeStatus, STATUS_LABEL } from './status';
 import { readState } from './store';
-import type { AgentId, AgentStatus, SwitchboardConfig, Thresholds, UsageSnapshot } from './types';
+import { AGENT_IDS, type AgentId, type AgentStatus, type SwitchboardConfig, type Thresholds, type UsageSnapshot } from './types';
 
-export const AGENT_TITLES: Record<AgentId, string> = { claude: 'Claude Code', agy: 'Antigravity' };
-const AGENT_ORDER: AgentId[] = ['claude', 'agy'];
+export const AGENT_TITLES: Record<AgentId, string> = { claude: 'Claude Code', agy: 'Antigravity', codex: 'ChatGPT (Codex)' };
+const AGENT_ORDER: AgentId[] = AGENT_IDS;
 
 export type AgentOverview = {
   agent: AgentId;

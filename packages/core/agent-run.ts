@@ -32,8 +32,11 @@ export type AgentRunResult = { proc: ProcessResult; outcome: Outcome; logPath: s
 export async function runAgentOnce(input: AgentRunInput): Promise<AgentRunResult> {
   const { cfg, agent, project, prompt, runId, timeoutMs, say, warnings } = input;
   // Read-only runs get a fixed minimal tool set instead of the configured allow/deny lists.
+  // codex has no tool lists: read-only means its read-only sandbox (it cannot write files).
   const rules = input.readOnly
-    ? { allow: ['Read', 'Glob', 'Grep'], deny: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'], args: cfg.permissions[agent].args }
+    ? agent === 'codex'
+      ? { allow: [], deny: [], args: ['--sandbox', 'read-only'] }
+      : { allow: ['Read', 'Glob', 'Grep'], deny: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'], args: cfg.permissions[agent].args }
     : cfg.permissions[agent];
   const args = buildAgentArgs(agent, cfg.agents[agent], prompt, rules, timeoutMs, input.sessionId, input.model);
   const logPath = logPathFor(runId);
@@ -79,7 +82,7 @@ export async function runAgentOnce(input: AgentRunInput): Promise<AgentRunResult
       cwd: project,
       timeoutMs,
       logPath,
-      logHeader: `[switchboard] ${(input.now?.() ?? new Date()).toISOString()} run=${runId} agent=${agent}${input.logNote ? ` ${input.logNote}` : ''}\n[switchboard] ${cfg.agents[agent].cmd} ${args.map((a) => (a === prompt ? '<prompt>' : a)).join(' ')}`,
+      logHeader: `[switchboard] ${(input.now?.() ?? new Date()).toISOString()} run=${runId} agent=${agent}${input.logNote ? ` ${input.logNote}` : ''}\n[switchboard] ${cfg.agents[agent].cmd} ${args.map((a) => (a === prompt || a === `\n${prompt}` ? '<prompt>' : a)).join(' ')}`,
     });
   } finally {
     // Always take the temporary agy rules away again, also after a timeout or an error.

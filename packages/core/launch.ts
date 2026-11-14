@@ -14,7 +14,7 @@ import { defaultConfigPath } from './config';
 import { maskSecrets } from './mask';
 import { readState, runsDir } from './store';
 import { matchAllowedProject } from './task-overview';
-import type { AgentId, SwitchboardConfig } from './types';
+import { isAgentId, type AgentId, type SwitchboardConfig } from './types';
 
 export type LaunchInput = {
   text: string;
@@ -184,7 +184,7 @@ const failFrom = (e: unknown): LaunchResult => (e instanceof SbError ? fail(e.me
 export async function newChatFromDashboard(cfg: SwitchboardConfig, projectInput: string, mode: string): Promise<LaunchResult & { chatId?: string }> {
   const project = matchAllowedProject(cfg, projectInput);
   if (!project) return fail('Цей проєкт не дозволений.');
-  if (mode !== 'auto' && mode !== 'claude' && mode !== 'agy') return fail('Невідомий режим чату.');
+  if (mode !== 'auto' && !isAgentId(mode)) return fail('Невідомий режим чату.');
   try {
     const chat = await createChat({ project, mode });
     return { ok: true, message: 'Новий чат створено.', chatId: chat.id };
@@ -195,7 +195,7 @@ export async function newChatFromDashboard(cfg: SwitchboardConfig, projectInput:
 
 export function setChatModeFromDashboard(chatId: string, mode: string): LaunchResult {
   if (!readState().chats[chatId]) return fail('Чату не існує.', 404);
-  if (mode !== 'auto' && mode !== 'claude' && mode !== 'agy') return fail('Невідомий режим чату.');
+  if (mode !== 'auto' && !isAgentId(mode)) return fail('Невідомий режим чату.');
   setChatMode(chatId, mode as 'auto' | AgentId);
   return { ok: true, message: 'Режим змінено.' };
 }
@@ -203,7 +203,7 @@ export function setChatModeFromDashboard(chatId: string, mode: string): LaunchRe
 /** Picks the model an agent uses in this chat ('' = the agent's default). */
 export function setChatModelFromDashboard(cfg: SwitchboardConfig, chatId: string, agent: string, model: string): LaunchResult {
   if (!readState().chats[chatId]) return fail('Чату не існує.', 404);
-  if (agent !== 'claude' && agent !== 'agy') return fail('Невідомий агент.');
+  if (!isAgentId(agent)) return fail('Невідомий агент.');
   if (!isKnownModel(cfg, agent, model)) return fail('Такої моделі в списку немає.');
   setChatModel(chatId, agent, model);
   return { ok: true, message: model ? `Модель ${agent}: ${model}.` : `Модель ${agent}: за замовчуванням.` };

@@ -65,6 +65,7 @@ export function buildAgentArgs(
   /** `--model` value; empty = the agent's own default. */
   model?: string,
 ): string[] {
+  if (agent === 'codex') return buildCodexArgs(cfg, prompt, rules, sessionId, model);
   const [flag, ...rest] = cfg.headlessArgs;
   const args = [flag!, prompt, ...rest];
   if (agent === 'claude') {
@@ -77,6 +78,19 @@ export function buildAgentArgs(
   if (sessionId) args.push(agent === 'claude' ? '--resume' : '--conversation', sessionId);
   if (model && !model.startsWith('-')) args.push('--model', model);
   return [...args, ...rules.args];
+}
+
+/**
+ * `codex exec [--json ...flags] [resume <thread id>] <prompt>`. Flags go BEFORE `resume`, where they are
+ * options of `exec` itself. A prompt that starts with "-" gets a leading newline so it is never read as a flag.
+ * The sandbox mode (read-only / workspace-write) comes from `rules.args`.
+ */
+function buildCodexArgs(cfg: AgentConfig, prompt: string, rules: PermissionRules & { args: string[] }, sessionId?: string, model?: string): string[] {
+  const args = [...cfg.headlessArgs, ...rules.args];
+  if (model && !model.startsWith('-')) args.push('--model', model);
+  if (sessionId) args.push('resume', sessionId);
+  args.push(prompt.startsWith('-') ? `\n${prompt}` : prompt);
+  return args;
 }
 
 export type ProcessResult = {

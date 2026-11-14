@@ -39,15 +39,17 @@ function launcher(name: string, env: Record<string, string>): string {
   return path;
 }
 
-function cfgFor(claude = 'chat', agy = 'chat') {
+function cfgFor(claude = 'chat', agy = 'chat', codex = 'chat') {
   chmodSync(FAKE, 0o755);
   const common = { FAKE_PROMPT_DUMP: dump, FAKE_ARGV_DUMP: join(dir, 'argv.txt'), FAKE_RESET_AT: inHours(2) };
   const c = launcher('claude-fake', { ...common, FAKE_AGENT_STYLE: 'claude', FAKE_AGENT_MODE: claude });
   const a = launcher('agy-fake', { ...common, FAKE_AGENT_STYLE: 'agy', FAKE_AGENT_MODE: agy });
+  const x = launcher('codex-fake', { ...common, FAKE_AGENT_STYLE: 'codex', FAKE_AGENT_MODE: codex });
   return parseConfig(`
 agents:
   claude: { cmd: "${c}", headlessArgs: ["-p", "--output-format", "json"] }
   agy: { cmd: "${a}", settingsPath: "${join(dir, 'agy-settings.json')}" }
+  codex: { cmd: "${x}" }
 routing: { section: [claude, agy] }
 permissions: { claude: { allow: [Read, Write] }, agy: { allow: [] } }
 notifications: { enabled: false }
@@ -165,6 +167,34 @@ describe('chat turns', () => {
     expect(state.chats[chat.id]!.lastAgent).toBe('agy');
     // the half-done work of the first agent is committed together with the second one's
     expect(git('show', '--stat', '--format=', chat.branch)).toMatch(/Footer\.astro/);
+  });
+
+  it('codex: starts a thread, resumes it by thread id and passes the chosen model', async () => {
+    const cfg = cfgFor();
+    const chat = await createChat({ project, mode: 'codex' });
+    const r = await turn(cfg, chat.id, 'перше');
+    expect(r.ok).toBe(true);
+    expect(r.agent).toBe('codex');
+    expect(r.files).toEqual(['chat/codex.txt']);
+    expect(replies(chat.id)[0]).toContain('echo(codex): ');
+    expect(replies(chat.id)[0]).toContain('[new, no-transcript]');
+    const sid = readState().chats[chat.id]!.sessions.codex;
+    expect(sid).toBeTruthy();
+    setChatModel(chat.id, 'codex', 'some-model');
+    await turn(cfg, chat.id, 'друге');
+    expect(replies(chat.id)[1]).toContain('[resumed, no-transcript]');
+    expect(readState().chats[chat.id]!.sessions.codex).toBe(sid);
+    expect(readFileSync(join(dir, 'argv.txt'), 'utf8').trim().split('\n')).toEqual(['codex model=-', 'codex model=some-model']);
+  });
+
+  it('codex: a usage limit in its JSON events marks it exhausted, and a fixed codex chat does not fail over', async () => {
+    const cfg = cfgFor('chat', 'chat', 'limit');
+    const chat = await createChat({ project, mode: 'codex' });
+    const r = await turn(cfg, chat.id, 'привіт');
+    expect(r.ok).toBe(false);
+    expect(r.agent).toBe('codex');
+    expect(readState().exhausted.codex).toBeTruthy();
+    expect(chatOrder(cfg, chat)).toEqual(['claude', 'agy']); // codex joins auto mode only via chat.order in the config
   });
 
   it('a fixed agent does not fail over', async () => {

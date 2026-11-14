@@ -54,7 +54,63 @@ function describeDenied(a: unknown): string {
   return name;
 }
 
+/** Every JSON object line of a JSONL stream, in order (`codex exec --json`). */
+function jsonLines(text: string): Record<string, any>[] {
+  const out: Record<string, any>[] = [];
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    try {
+      const v = JSON.parse(t);
+      if (v && typeof v === 'object') out.push(v);
+    } catch { /* not a complete JSON line */ }
+  }
+  return out;
+}
+
+/** Error text of a codex event: `{type:"turn.failed", error:{message}}` or `{type:"error", message}`. */
+function codexErrorText(ev: Record<string, any>): string | undefined {
+  const m = ev.error?.message ?? ev.message ?? ev.error;
+  return typeof m === 'string' && m.trim() ? m.trim() : undefined;
+}
+
+/**
+ * `codex exec --json` prints one event per line: thread.started {thread_id}, item.completed {item:{type:"agent_message",text}},
+ * turn.completed, turn.failed, error. The run succeeded when a turn completed and none failed; the answer is the last
+ * agent message. Codex has no per-tool denial report (the sandbox simply makes the command fail), so `denied` is empty.
+ */
+export function interpretCodex(stdout: string, stderr: string): Outcome {
+  const events = jsonLines(stdout);
+  if (events.length === 0) {
+    const tail = stderr.trim().split('\n').slice(-3).join(' ').slice(0, 300);
+    return { ok: false, denied: [], error: tail || 'no JSON events in the codex output' };
+  }
+  let sessionId: string | undefined;
+  let reply: string | undefined;
+  let completed = false;
+  let failure: string | undefined;
+  let lastError: string | undefined;
+  for (const ev of events) {
+    if (ev.type === 'thread.started') sessionId = sid(ev.thread_id) ?? sessionId;
+    else if (ev.type === 'item.completed' && ev.item?.type === 'agent_message') reply = full(ev.item.text) ?? reply;
+    else if (ev.type === 'turn.completed') completed = true;
+    else if (ev.type === 'turn.failed') failure = codexErrorText(ev) ?? 'turn.failed';
+    else if (ev.type === 'error') lastError = codexErrorText(ev) ?? lastError;
+  }
+  const ok = completed && !failure;
+  return {
+    ok,
+    denied: [],
+    summary: cut(reply),
+    reply,
+    sessionId,
+    // Non-fatal "error" events (reconnects) only matter when the turn never completed.
+    error: ok ? undefined : (failure ?? lastError ?? 'the turn did not complete').slice(0, MAX_SUMMARY),
+  };
+}
+
 export function interpretOutput(agent: AgentId, stdout: string, stderr: string): Outcome {
+  if (agent === 'codex') return interpretCodex(stdout, stderr);
   const json = lastJsonObject(stdout) ?? lastJsonObject(stderr);
   if (!json) return { ok: false, denied: [], error: 'no JSON result in the agent output' };
 

@@ -2,7 +2,10 @@
 
 import type { AttachmentRef } from './attachments';
 
-export type AgentId = 'claude' | 'agy';
+/** Agents Switchboard can drive: Claude Code, Antigravity and ChatGPT (via the Codex CLI). */
+export type AgentId = 'claude' | 'agy' | 'codex';
+export const AGENT_IDS: AgentId[] = ['claude', 'agy', 'codex'];
+export const isAgentId = (v: unknown): v is AgentId => typeof v === 'string' && (AGENT_IDS as string[]).includes(v);
 
 export type UsageWindow = {
   /** Percent of the window already used, 0..100. */

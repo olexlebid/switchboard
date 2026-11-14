@@ -3,9 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import type { AgentConfig, AgentId, SwitchboardConfig } from './types';
-
-const AGENT_IDS: AgentId[] = ['claude', 'agy'];
+import { AGENT_IDS, type AgentConfig, type AgentId, type SwitchboardConfig } from './types';
 
 /** Regex sources (case-insensitive) searched in the LAST lines of an agent's output. */
 export const DEFAULT_LIMIT_PATTERNS = [
@@ -49,12 +47,14 @@ export function parseConfig(text: string): SwitchboardConfig {
 
   const agents = {} as Record<AgentId, AgentConfig>;
   for (const id of AGENT_IDS) {
-    const a = raw.agents?.[id];
+    // codex was added later: a config written before that still loads (the default command is `codex`).
+    const a = raw.agents?.[id] ?? (id === 'codex' ? { cmd: 'codex' } : undefined);
     if (!a || typeof a.cmd !== 'string') fail(`agents.${id}.cmd is required`);
     agents[id] = {
       cmd: a.cmd,
-      headlessArgs: strArray(a.headlessArgs, `agents.${id}.headlessArgs`, ['-p']),
-      usageArgs: strArray(a.usageArgs, `agents.${id}.usageArgs`, id === 'claude' ? ['-p', '/usage'] : ['-p', '/quota']),
+      headlessArgs: strArray(a.headlessArgs, `agents.${id}.headlessArgs`, id === 'codex' ? ['exec', '--json'] : ['-p']),
+      // codex has no usage command: its limits come from the rate-limit records in its own session logs.
+      usageArgs: strArray(a.usageArgs, `agents.${id}.usageArgs`, id === 'claude' ? ['-p', '/usage'] : id === 'agy' ? ['-p', '/quota'] : []),
       models: strArray(a.models, `agents.${id}.models`, []),
       settingsPath: typeof a.settingsPath === 'string' ? a.settingsPath : undefined,
     };
@@ -82,11 +82,13 @@ export function parseConfig(text: string): SwitchboardConfig {
     permissions[id] = {
       allow: strArray(p.allow, `permissions.${id}.allow`, []),
       deny: strArray(p.deny, `permissions.${id}.deny`, []),
-      args: strArray(p.args, `permissions.${id}.args`, []),
+      // codex has no allow/deny lists: its write access is the sandbox mode passed as an argument.
+      args: strArray(p.args, `permissions.${id}.args`, id === 'codex' ? ['--sandbox', 'workspace-write'] : []),
     };
   }
   for (const id of AGENT_IDS) {
-    if (agents[id].headlessArgs[0] !== '-p') fail(`agents.${id}.headlessArgs must start with "-p"`);
+    const first = id === 'codex' ? 'exec' : '-p';
+    if (agents[id].headlessArgs[0] !== first) fail(`agents.${id}.headlessArgs must start with "${first}"`);
   }
   const l = raw.limits ?? {};
   const d = raw.dashboard ?? {};
@@ -127,7 +129,7 @@ export function parseConfig(text: string): SwitchboardConfig {
     chat: {
       order: ((): AgentId[] => {
         const o = raw.chat?.order ?? ['claude', 'agy'];
-        if (!Array.isArray(o) || o.some((x) => !AGENT_IDS.includes(x as AgentId))) fail('chat.order must be a list of claude | agy');
+        if (!Array.isArray(o) || o.some((x) => !AGENT_IDS.includes(x as AgentId))) fail(`chat.order must be a list of ${AGENT_IDS.join(' | ')}`);
         return o as AgentId[];
       })(),
     },

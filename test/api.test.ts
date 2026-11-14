@@ -133,7 +133,7 @@ describe('auth and discovery', () => {
     await boot();
     const r = await call('GET', '/v1/models');
     expect(r.status).toBe(200);
-    expect(r.json.agents.map((a: any) => a.agent)).toEqual(['claude', 'agy']);
+    expect(r.json.agents.map((a: any) => a.agent)).toEqual(['claude', 'agy', 'codex']);
     expect(r.json.agents[0].models.map((m: any) => m.id)).toContain('opus');
     expect(r.json.projects).toEqual(['site']);
     expect(JSON.stringify(r.json)).not.toContain(dir);

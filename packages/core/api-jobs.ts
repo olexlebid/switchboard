@@ -8,7 +8,7 @@ import { maskSecrets } from './mask';
 import { getModels, isKnownModel } from './models';
 import { readState, updateChat } from './store';
 import { allowedProjects } from './task-overview';
-import type { AgentId, Chat, ChatMessage, SwitchboardConfig } from './types';
+import { AGENT_IDS, isAgentId, type AgentId, type Chat, type ChatMessage, type SwitchboardConfig } from './types';
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -129,11 +129,11 @@ export async function createPrompt(cfg: SwitchboardConfig, req: PromptRequest): 
   if (prompt.length > MAX_PROMPT) throw new ApiError(400, 'prompt_too_long', `"prompt" задовгий (максимум ${MAX_PROMPT} символів).`);
 
   const agentRaw = req.agent === undefined ? 'auto' : req.agent;
-  if (agentRaw !== 'auto' && agentRaw !== 'claude' && agentRaw !== 'agy') throw new ApiError(400, 'unknown_agent', '"agent": claude, agy або auto.');
+  if (agentRaw !== 'auto' && !isAgentId(agentRaw)) throw new ApiError(400, 'unknown_agent', `"agent": ${AGENT_IDS.join(', ')} або auto.`);
   const mode = agentRaw as 'auto' | AgentId;
   const model = req.model === undefined || req.model === null || req.model === '' ? undefined : str(req.model);
   if (req.model !== undefined && req.model !== null && req.model !== '' && !model) throw new ApiError(400, 'bad_model', '"model" має бути рядком.');
-  if (model && mode === 'auto') throw new ApiError(400, 'model_needs_agent', 'Щоб вибрати "model", вкажи конкретного "agent" (claude або agy).');
+  if (model && mode === 'auto') throw new ApiError(400, 'model_needs_agent', `Щоб вибрати "model", вкажи конкретного "agent" (${AGENT_IDS.join(', ')}).`);
   if (model && mode !== 'auto' && !isKnownModel(cfg, mode, model)) {
     const known = getModels(cfg)[mode].map((m) => m.id).join(', ');
     throw new ApiError(400, 'unknown_model', `Моделі "${model}" немає в списку ${mode}${known ? `: ${known}` : ''}.`);

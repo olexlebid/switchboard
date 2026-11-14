@@ -42,14 +42,15 @@ describe('getOverview', () => {
     const c = cfg();
     const o = await getOverview('cached', c);
     expect(calls('claude') + calls('agy')).toBe(0);
-    expect(o.summary.unknown).toBe(2);
-    expect(o.agents.map((a) => a.agent)).toEqual(['claude', 'agy']);
+    expect(o.summary.unknown).toBe(3);
+    expect(o.agents.map((a) => a.agent)).toEqual(['claude', 'agy', 'codex']);
   });
 
   it('force reads both CLIs; if-stale reuses the result within the TTL', async () => {
     const c = cfg();
     const first = await getOverview('force', c);
-    expect(first.agents.every((a) => a.snapshot)).toBe(true);
+    expect(first.agents.slice(0, 2).every((a) => a.snapshot)).toBe(true);
+    expect(first.agents[2]?.error).toMatch(/no rate-limit records/); // codex has not run on this machine yet
     expect(first.agents[1]?.snapshot?.modelCount).toBe(2);
     const usageCallsAfterForce = calls('claude');
     await getOverview('if-stale', c);

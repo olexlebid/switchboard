@@ -15,11 +15,11 @@ import { detectLimit } from './limit-detect';
 import { collectUsage } from './limits';
 import { maskSecrets } from './mask';
 import { notify as defaultNotify, type Notify } from './notify';
-import { getOverview, type AgentOverview } from './overview';
+import { AGENT_TITLES, getOverview, type AgentOverview } from './overview';
 import { protectedTouched } from './protected';
 import { routeTask } from './router';
 import { addProject, readState, saveChat, saveRun, setExhausted, updateChat } from './store';
-import type { AgentId, Chat, ChatMessage, Run, SwitchboardConfig, UsageSnapshot } from './types';
+import { isAgentId, type AgentId, type Chat, type ChatMessage, type Run, type SwitchboardConfig, type UsageSnapshot } from './types';
 
 export type ChatDeps = {
   overview?: () => Promise<AgentOverview[]>;
@@ -110,13 +110,13 @@ export function addUserMessage(
 
 /** Sets (or clears, with an empty string) the model used by `agent` in this chat. */
 export function setChatModel(chatId: string, agent: AgentId, model: string): void {
-  if (agent !== 'claude' && agent !== 'agy') throw new SbError('Невідомий агент.', 2);
+  if (!isAgentId(agent)) throw new SbError('Невідомий агент.', 2);
   if (model && !/^[A-Za-z0-9][\w.:()-]{0,79}$/.test(model)) throw new SbError('Некоректна назва моделі.', 2);
   if (!updateChat(chatId, (c) => { c.models = { ...c.models, [agent]: model || undefined }; })) throw new SbError('Чату не існує.', 2);
 }
 
 export function setChatMode(chatId: string, mode: 'auto' | AgentId): void {
-  if (mode !== 'auto' && mode !== 'claude' && mode !== 'agy') throw new SbError('Невідомий режим чату.', 2);
+  if (mode !== 'auto' && !isAgentId(mode)) throw new SbError('Невідомий режим чату.', 2);
   if (!updateChat(chatId, (c) => { c.mode = mode; })) throw new SbError('Чату не існує.', 2);
 }
 
@@ -305,7 +305,7 @@ export async function runChatTurn(
           if (canHand) {
             handovers++;
             exclude = [...exclude, agent];
-            const note = `${agent === 'claude' ? 'Claude' : 'Antigravity'}: ${limit.reason}. Передаю розмову іншому агентові.`;
+            const note = `${AGENT_TITLES[agent]}: ${limit.reason}. Передаю розмову іншому агентові.`;
             updateChat(chatId, (c) => { c.messages.push({ id: newId('m'), role: 'system', text: note, at: now().toISOString() }); });
             await notify('Switchboard: чат', note).catch(() => false);
             // Keep the half-done edits: they are on disk and the next agent sees them in the same branch.

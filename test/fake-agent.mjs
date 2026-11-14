@@ -17,13 +17,15 @@ import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const args = process.argv.slice(2);
-const prompt = args[0] === '-p' ? args[1] ?? '' : '';
-const mode = process.env.FAKE_AGENT_MODE ?? 'success';
 const style = process.env.FAKE_AGENT_STYLE ?? 'claude';
+// codex style: `exec --json <flags> [resume <id>] <prompt>`: the prompt is the last argument.
+const prompt = style === 'codex' ? (args.at(-1) ?? '').replace(/^\n/, '') : args[0] === '-p' ? args[1] ?? '' : '';
+const mode = process.env.FAKE_AGENT_MODE ?? 'success';
 const taskId = /Task id: (t-[\w-]+)/.exec(prompt)?.[1] ?? 'unknown';
 // Session continuity (chat): --resume <id> (claude) / --conversation <id> (agy).
-const resumeId = args[args.indexOf(style === 'agy' ? '--conversation' : '--resume') + 1];
-const hasSession = args.includes(style === 'agy' ? '--conversation' : '--resume');
+const sessionFlag = style === 'agy' ? '--conversation' : style === 'codex' ? 'resume' : '--resume';
+const resumeId = args[args.indexOf(sessionFlag) + 1];
+const hasSession = args.includes(sessionFlag);
 if (process.env.FAKE_PROMPT_DUMP) appendFileSync(process.env.FAKE_PROMPT_DUMP, `=== ${style}\n${prompt}\n`);
 // FAKE_ARGV_DUMP=<file>: one line per run with the model argument (if any), to check `--model`.
 if (process.env.FAKE_ARGV_DUMP) appendFileSync(process.env.FAKE_ARGV_DUMP, `${style} model=${args.includes('--model') ? args[args.indexOf('--model') + 1] : '-'}\n`);
@@ -33,7 +35,12 @@ if (process.env.FAKE_ARGS_DUMP) appendFileSync(process.env.FAKE_ARGS_DUMP, `${JS
 
 const sessionOut = hasSession ? resumeId : `${style}-${Math.random().toString(36).slice(2, 8)}`;
 function report({ ok = true, denied = [], text = 'done' }) {
-  if (style === 'agy') {
+  if (style === 'codex') {
+    console.log(JSON.stringify({ type: 'thread.started', thread_id: sessionOut }));
+    console.log(JSON.stringify({ type: 'turn.started' }));
+    console.log(JSON.stringify({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text } }));
+    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
+  } else if (style === 'agy') {
     console.log(JSON.stringify({
       conversation_id: sessionOut, status: 'SUCCESS', response: text, duration_seconds: 0.1,
       denied_actions: denied.map((d) => ({ action: d.toLowerCase(), display_name: d })),
@@ -100,7 +107,10 @@ switch (mode) {
   case 'limit': {
     writeWork();
     const reset = process.env.FAKE_RESET_AT ?? new Date(Date.now() + 2 * 3600_000).toISOString();
-    if (style === 'agy') {
+    if (style === 'codex') {
+      console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-limit' }));
+      console.log(JSON.stringify({ type: 'turn.failed', error: { message: `You've hit your usage limit. Try again at ${reset}.` } }));
+    } else if (style === 'agy') {
       console.log(JSON.stringify({ conversation_id: 'fake', status: 'ERROR', response: '', error: `RESOURCE_EXHAUSTED: quota exceeded. Resets at ${reset}`, denied_actions: [] }));
       console.error(`Error: RESOURCE_EXHAUSTED (429) resets at ${reset}`);
     } else {

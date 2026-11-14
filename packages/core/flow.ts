@@ -21,7 +21,7 @@ import { routeTask } from './router';
 import { logPathFor, type ProcessResult } from './runner';
 import { addProject, readState, saveRun, saveTask, setExhausted } from './store';
 import { newTaskId, taskTitle, writeTaskFile } from './tasks';
-import type { AgentId, Handoff, Run, SwitchboardConfig, Task, UsageSnapshot } from './types';
+import { AGENT_IDS, type AgentId, type Handoff, type Run, type SwitchboardConfig, type Task, type UsageSnapshot } from './types';
 
 export { SbError };
 
@@ -260,7 +260,7 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
       }
       writeTaskFile(task);
       if (!existsSync(resolve(project, 'RULES.md'))) warnings.push('У проєкті немає RULES.md: запусти `sb init <проєкт>`, щоб агенти знали правила.');
-      if (cfg.permissions[agent].allow.length === 0) {
+      if (agent !== 'codex' && cfg.permissions[agent].allow.length === 0) {
         warnings.push(`Для ${agent} не задано дозволів (permissions.${agent}.allow): запис файлів, імовірно, буде заблоковано.`);
       }
 
@@ -300,9 +300,9 @@ async function drive(task: Task, ctx: Ctx, opts: DriveOpts): Promise<StartResult
         say(`⚠ ${agent}: ${limit.reason}. Агент недоступний до ${new Date(until).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' })}.`);
 
         const tail = outputTail(proc.stdout, proc.stderr, outcome);
-        const nextAgent = other(agent);
+        const handTo = nextAgent(cfg, task.type, agent);
         const stopHere = opts.noHandoff || handoverCount >= cfg.handoff.maxHandoffs;
-        await writeCheckpoint({ project, task, from: agent, to: stopHere ? undefined : nextAgent, reason: limit.reason, resetsAt: limit.resetsAt, tail, now });
+        await writeCheckpoint({ project, task, from: agent, to: stopHere ? undefined : handTo, reason: limit.reason, resetsAt: limit.resetsAt, tail, now });
         files = await changedFiles(project, task.baseSha);
         continuing = true;
         // No exclusion needed: the agent that just hit its limit now carries an "exhausted until" mark,
@@ -392,7 +392,9 @@ function oneLine(text: string, max: number): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-const other = (a: AgentId): AgentId => (a === 'claude' ? 'agy' : 'claude');
+/** Who is expected to take over from `a`: the next agent in the task type's routing order (or any other agent). */
+const nextAgent = (cfg: SwitchboardConfig, type: string, a: AgentId): AgentId =>
+  [...(cfg.routing[type] ?? []), ...AGENT_IDS].find((x) => x !== a) ?? a;
 
 /** Agents that wrote code for the task under review (empty when unknown). */
 function reviewAuthors(task: Task): AgentId[] {
