@@ -33,11 +33,11 @@ type Props = {
   onResult: OnResult;
   onMerge: (t: MergeTarget) => void;
   onSelect: (id: string) => void;
-  onNew: (project: string) => void;
   reload: () => Promise<void>;
 };
 
 const DEFAULT_MODEL = '__default';
+const AGENT_NAMES: Record<'auto' | AgentId, string> = { auto: 'Агент', claude: 'Claude Code', agy: 'Antigravity', codex: 'ChatGPT (Codex)' };
 
 // Tailwind classes for the markdown subset (no typography plugin: the shadcn way is plain utilities).
 const MARKDOWN =
@@ -76,7 +76,7 @@ function Message({ m }: { m: ChatMessageView }) {
   );
 }
 
-export function ChatPanel({ chat, activeId, projects, models, rules, now, onResult, onMerge, onSelect, onNew, reload }: Props) {
+export function ChatPanel({ chat, activeId, projects, models, rules, now, onResult, onMerge, onSelect, reload }: Props) {
   // Only show a conversation that is really the selected tab (the data may still be loading after a switch).
   const active = chat.active && chat.active.id === activeId ? chat.active : undefined;
   // Drafts are kept per chat, so switching tabs never loses what was typed.
@@ -86,16 +86,22 @@ export function ChatPanel({ chat, activeId, projects, models, rules, now, onResu
   const text = draft.text;
   const files = draft.files;
   const [sending, setSending] = useState(false);
+  // "New chat" is only a draft view: the chat itself is created when the first message is sent.
+  const [composing, setComposing] = useState(false);
+  const [fresh, setFresh] = useState<{ project: string; mode: 'auto' | AgentId; model: string; text: string; files: File[] }>({ project: '', mode: 'auto', model: '', text: '', files: [] });
+  const freshProject = fresh.project || projects[0]?.path || '';
+  const showDraft = composing || chat.chats.length === 0;
   const mode = active?.mode ?? 'auto';
   const viewport = useRef<HTMLDivElement>(null);
   const running = active?.status === 'running';
   const lastId = active?.messages.at(-1)?.id;
+  const thinking = running || sending;
 
   // Keep the newest message in view.
   useEffect(() => {
     const el = viewport.current?.querySelector<HTMLElement>('[data-slot=scroll-area-viewport]');
     if (el) el.scrollTop = el.scrollHeight;
-  }, [lastId, running, active?.id]);
+  }, [lastId, thinking, active?.id]);
 
   const act = async (data: Record<string, string | undefined>, sendFiles: File[] = [], retry?: () => void) => {
     const r = await post('/api/chat', data, sendFiles);
@@ -117,27 +123,40 @@ export function ChatPanel({ chat, activeId, projects, models, rules, now, onResu
     if (r.ok) setDraft(chatId, { text: '', files: [] });
   };
 
+  const startChat = async () => {
+    const { text: body, files: attached, mode: freshMode, model: freshModel } = fresh;
+    if (!freshProject || sending || (!body.trim() && attached.length === 0)) return;
+    setSending(true);
+    const r = await post('/api/chat', { op: 'new', project: freshProject, mode: freshMode });
+    if (!r.ok || !r.chatId) {
+      onResult(r);
+      setSending(false);
+      return;
+    }
+    const id = r.chatId;
+    if (freshMode !== 'auto' && freshModel) await post('/api/chat', { op: 'model', chat: id, agent: freshMode, model: freshModel });
+    // From here on the message belongs to the new chat, so a blocked tree can be stashed and the send repeated.
+    setDraft(id, { text: body, files: attached });
+    setFresh((f) => ({ ...f, text: '', files: [] }));
+    setComposing(false);
+    await reload();
+    onSelect(id);
+    await sendTo(id, body, attached);
+    setSending(false);
+  };
+  const freshModels = fresh.mode === 'auto' ? [] : models[fresh.mode];
+  const selectChat = (id: string) => { setComposing(false); onSelect(id); };
+
   const drop = dropHandlers({ files, rules, onChange: (f) => active && setDraft(active.id, { files: f }), onProblem: (message) => onResult({ ok: false, error: message }) });
   const waitingLeft = active?.waitUntil ? Date.parse(active.waitUntil) - now : undefined;
   const modelList = mode === 'auto' ? [] : models[mode];
   const chosenModel = mode === 'auto' ? undefined : active?.models[mode];
 
-  // "New chat": one project creates it right away, several open a small project menu.
-  const newChatButton =
-    projects.length === 1 ? (
-      <Button variant="outline" className="w-full justify-start" onClick={() => onNew(projects[0]!.path)}><MessageSquarePlus aria-hidden="true" /> Новий чат</Button>
-    ) : (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" className="w-full justify-start" disabled={projects.length === 0}><MessageSquarePlus aria-hidden="true" /> Новий чат</Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuLabel>Проєкт нового чату</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {projects.map((p) => <DropdownMenuItem key={p.path} onSelect={() => onNew(p.path)}>{p.name}</DropdownMenuItem>)}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
+  const newChatButton = (
+    <Button variant={showDraft ? 'secondary' : 'outline'} className="w-full justify-start" onClick={() => setComposing(true)} disabled={projects.length === 0}>
+      <MessageSquarePlus aria-hidden="true" /> Новий чат
+    </Button>
+  );
 
   return (
     <Card size="sm" className="h-full gap-0 overflow-hidden py-0" {...drop}>
@@ -151,11 +170,11 @@ export function ChatPanel({ chat, activeId, projects, models, rules, now, onResu
               {chat.chats.map((c) => (
                 <Button
                   key={c.id}
-                  variant={c.id === activeId ? 'secondary' : 'ghost'}
+                  variant={!showDraft && c.id === activeId ? 'secondary' : 'ghost'}
                   className="h-auto w-full min-w-0 justify-start gap-2 overflow-hidden px-2 py-1.5 text-left font-normal"
-                  aria-current={c.id === activeId ? 'true' : undefined}
+                  aria-current={!showDraft && c.id === activeId ? 'true' : undefined}
                   title={`${c.projectName}: ${c.title}`}
-                  onClick={() => onSelect(c.id)}
+                  onClick={() => selectChat(c.id)}
                 >
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-sm">{c.title}</span>
@@ -171,11 +190,60 @@ export function ChatPanel({ chat, activeId, projects, models, rules, now, onResu
 
         {/* Right: the conversation with the agent and model pickers at the top. */}
         <section className="flex min-h-0 flex-col" aria-label="Розмова">
-          {!active ? (
+          {showDraft ? (
+            <div className="m-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
+              <h2 className="text-center text-2xl font-medium tracking-tight">Про що поговоримо?</h2>
+              <div className="flex flex-col gap-2 rounded-2xl border bg-muted/30 p-3">
+                <AttachChips files={fresh.files} onChange={(f) => setFresh((x) => ({ ...x, files: f }))} />
+                <Textarea
+                  value={fresh.text}
+                  onChange={(e) => setFresh((x) => ({ ...x, text: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void startChat(); } }}
+                  rows={3}
+                  maxLength={8000}
+                  autoFocus
+                  placeholder="Напиши, що змінити в проєкті… Чат створиться після відправки"
+                  aria-label="Перше повідомлення нового чату"
+                  className="min-h-20 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <AttachButton files={fresh.files} rules={rules} onChange={(f) => setFresh((x) => ({ ...x, files: f }))} onProblem={(message) => onResult({ ok: false, error: message })} disabled={sending} />
+                  {projects.length > 1 && (
+                    <Select value={freshProject} onValueChange={(v) => setFresh((x) => ({ ...x, project: v }))} disabled={sending}>
+                      <SelectTrigger size="sm" className="w-44" aria-label="Проєкт"><SelectValue /></SelectTrigger>
+                      <SelectContent>{projects.map((p) => <SelectItem key={p.path} value={p.path}>{p.name}</SelectItem>)}</SelectContent>
+                    </Select>
+                  )}
+                  <Select value={fresh.mode} onValueChange={(v) => { if (v === 'auto' || isAgentId(v)) setFresh((x) => ({ ...x, mode: v, model: '' })); }} disabled={sending}>
+                    <SelectTrigger size="sm" className="w-40" aria-label="Агент"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">Авто</SelectItem>
+                      <SelectItem value="claude">Claude</SelectItem>
+                      <SelectItem value="agy">Antigravity</SelectItem>
+                      <SelectItem value="codex">ChatGPT</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {fresh.mode !== 'auto' && (
+                    <Select value={fresh.model || DEFAULT_MODEL} onValueChange={(v) => setFresh((x) => ({ ...x, model: v === DEFAULT_MODEL ? '' : v }))} disabled={sending}>
+                      <SelectTrigger size="sm" className="w-52" aria-label="Модель і версія"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={DEFAULT_MODEL}>Модель за замовчуванням</SelectItem>
+                        {freshModels.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <Button className="ml-auto" onClick={() => void startChat()} disabled={sending || !freshProject || (!fresh.text.trim() && fresh.files.length === 0)}>
+                    {sending ? <Spinner /> : <Send aria-hidden="true" />} Надіслати
+                  </Button>
+                </div>
+              </div>
+              <p className="text-center text-xs text-muted-foreground">Кожен чат працює у своєму проєкті й може йти паралельно з іншими.</p>
+            </div>
+          ) : !active ? (
             <Empty className="m-auto border-0 p-6">
               <EmptyHeader>
-                <EmptyTitle>{chat.chats.length === 0 ? 'Створи чат' : 'Обери чат ліворуч'}</EmptyTitle>
-                <EmptyDescription>Кожен чат працює у своєму проєкті й може йти паралельно з іншими. Натисни «Новий чат».</EmptyDescription>
+                <EmptyTitle>Обери чат ліворуч</EmptyTitle>
+                <EmptyDescription>Або натисни «Новий чат».</EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (
@@ -232,13 +300,26 @@ export function ChatPanel({ chat, activeId, projects, models, rules, now, onResu
                     ) : (
                       active.messages.map((m) => <Message key={m.id} m={m} />)
                     )}
-                    {running && (
-                      <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-                        <Spinner /> Агент працює{active.runningSince ? ` · ${formatDuration(now - Date.parse(active.runningSince))}` : ''}
-                        <Button variant="destructive" size="xs" className="ml-auto" onClick={() => void act({ op: 'stop', chat: active.id })}>
-                          <Square aria-hidden="true" /> Зупинити
-                        </Button>
-                      </p>
+                    {thinking && (
+                      <div className="flex flex-col items-start gap-1">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Badge variant="outline">{AGENT_NAMES[mode]}</Badge>
+                          {active.runningSince && <span>{formatDuration(now - Date.parse(active.runningSince))}</span>}
+                        </div>
+                        <div className="flex items-center gap-3 rounded-xl bg-muted px-3 py-2.5" role="status">
+                          <span className="flex items-center gap-1" aria-hidden="true">
+                            <span className="size-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms]" />
+                            <span className="size-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:150ms]" />
+                            <span className="size-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:300ms]" />
+                          </span>
+                          <span className="animate-pulse text-sm text-muted-foreground">Думає…</span>
+                          {running && (
+                            <Button variant="destructive" size="xs" className="ml-2" onClick={() => void act({ op: 'stop', chat: active.id })}>
+                              <Square aria-hidden="true" /> Зупинити
+                            </Button>
+                          )}
+                        </div>
+                      </div>
                     )}
                   </div>
                 </ScrollArea>

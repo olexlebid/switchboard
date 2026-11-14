@@ -70,16 +70,6 @@ export default function App() {
   useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
   const reloadAsync = async () => { await reload(); };
 
-  // A new chat per project; an untouched one is reused instead of piling up empty chats.
-  const newChat = async (project: string) => {
-    const spare = chats.find((c) => c.project === project && c.title === 'Новий чат' && c.status === 'idle');
-    if (spare) { openChat(spare.id); return; }
-    const r = await post('/api/chat', { op: 'new', project, mode: 'auto' });
-    if (!r.ok || !r.chatId) { show(r); return; }
-    openChat(r.chatId);
-    await reload();
-  };
-
   const refresh = async () => {
     setRefreshing(true);
     show(await post('/api/refresh', {}));
@@ -150,7 +140,7 @@ export default function App() {
           {projects.length > 0 ? (
             <ChatPanel
               chat={state.chat} activeId={activeId} projects={projects} models={state.models} rules={state.uploads} now={now}
-              onResult={show} onMerge={setMergeTarget} onSelect={openChat} onNew={(p) => void newChat(p)} reload={reloadAsync}
+              onResult={show} onMerge={setMergeTarget} onSelect={openChat} reload={reloadAsync}
             />
           ) : (
             <NoProjects />
