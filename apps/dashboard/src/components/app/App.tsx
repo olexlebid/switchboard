@@ -1,4 +1,4 @@
-// The dashboard: limits of both agents (left), chat windows as tabs (right), manual marks, activity (tasks + chats).
+// The dashboard, top to bottom: limits of the three agents, manual marks, activity (tasks + chats), chat windows as tabs.
 // Everything is built from shadcn/ui components; data comes from GET /api/state.
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -102,9 +102,10 @@ export default function App() {
     return (
       <div className="mx-auto flex max-w-7xl flex-col gap-4 p-4" aria-busy="true">
         <Skeleton className="h-9 w-72" />
-        <div className="grid gap-4 lg:grid-cols-[26rem_1fr]">
-          <Skeleton className="h-64" />
-          <Skeleton className="h-64" />
+        <div className="grid gap-4 md:grid-cols-3">
+          <Skeleton className="h-48" />
+          <Skeleton className="h-48" />
+          <Skeleton className="h-48" />
         </div>
         {offline && <p role="status" className="text-sm text-destructive">Немає зв’язку із сервером Switchboard. Повторюю спробу…</p>}
       </div>
@@ -141,32 +142,29 @@ export default function App() {
           </Alert>
         )}
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
-          <div className="flex flex-col gap-4">
-            {state.overview.agents.map((a) => <AgentCard key={a.agent} agent={a} thresholds={state.overview.thresholds} now={now} />)}
-          </div>
-          {/* The chat follows the height of the two cards on the left (absolute fill), with a sensible minimum. */}
-          <div className="relative min-h-[34rem]">
-            <div className="absolute inset-0">
-              {projects.length > 0 ? (
-                <ChatPanel
-                  chat={state.chat} tabs={tabs} activeId={activeId} projects={projects} models={state.models} rules={state.uploads} now={now}
-                  onResult={show} onMerge={setMergeTarget} onSelect={openChat} onClose={closeChat} onNew={(p) => void newChat(p)} reload={reloadAsync}
-                />
-              ) : (
-                <NoProjects />
-              )}
-            </div>
-          </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          {state.overview.agents.map((a) => <AgentCard key={a.agent} agent={a} thresholds={state.overview.thresholds} now={now} />)}
+        </div>
+
+        <ManualMarks cards={state.overview.manual} onChange={(id, v) => void mark(id, v)} />
+
+        <TaskPanel tasks={state.tasks} chats={chats} rules={state.uploads} now={now} onResult={show} onMerge={setMergeTarget} onOpenChat={openChat} reload={reloadAsync} />
+
+        {/* The chat sits at the very bottom with a fixed height, so the page above it can grow freely. */}
+        <div className="h-[44rem]">
+          {projects.length > 0 ? (
+            <ChatPanel
+              chat={state.chat} tabs={tabs} activeId={activeId} projects={projects} models={state.models} rules={state.uploads} now={now}
+              onResult={show} onMerge={setMergeTarget} onSelect={openChat} onClose={closeChat} onNew={(p) => void newChat(p)} reload={reloadAsync}
+            />
+          ) : (
+            <NoProjects />
+          )}
         </div>
 
         <DirtyTreeDialog blocked={blocked} onClose={() => setBlocked(undefined)} onResult={show} reload={reloadAsync} />
 
         <MergeDialog target={mergeTarget} onClose={() => setMergeTarget(undefined)} onResult={show} reload={reloadAsync} />
-
-        <ManualMarks cards={state.overview.manual} onChange={(id, v) => void mark(id, v)} />
-
-        <TaskPanel tasks={state.tasks} chats={chats} rules={state.uploads} now={now} onResult={show} onMerge={setMergeTarget} onOpenChat={openChat} reload={reloadAsync} />
       </main>
     </TooltipProvider>
   );
