@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { checkRequest } from '../apps/dashboard/src/guard';
 import { parseConfig } from '../packages/core/config';
 import { countAgyModels } from '../packages/core/limits/agy';
+import { getModels } from '../packages/core/models';
 import { getOverview } from '../packages/core/overview';
 import { readState, setManual } from '../packages/core/store';
 import { AGY_QUOTA, CLAUDE_USAGE } from './fixtures';
@@ -65,6 +66,29 @@ describe('getOverview', () => {
     await getOverview('force', c);
     const modelCalls = require('node:fs').readFileSync(join(dir, 'agy.calls'), 'utf8').split('\n').filter((l: string) => l === 'models').length;
     expect(modelCalls).toBe(1);
+  });
+
+  it('the Оновити button (probe) re-reads `agy models` even inside the cache TTL, so new models show up', async () => {
+    const c = cfg();
+    // probe also runs `codex exec`: use a fake CLI and an empty CODEX_HOME so the real one is never touched
+    c.agents.codex.cmd = fakeCli('codex', "console.log('ok');");
+    process.env.CODEX_HOME = join(dir, 'codex-home');
+    // The agy fake now prints its model list from a file we can change between refreshes.
+    const list = join(dir, 'agy-models.txt');
+    writeFileSync(list, 'm-1\tModel 1\n');
+    c.agents.agy.cmd = fakeCli('agy2', `if (process.argv[2]==='models') process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(list)}, 'utf8')); else console.log(${JSON.stringify(AGY_QUOTA)});`);
+    try {
+      await getOverview('probe', c);
+      expect(getModels(c).agy.map((m) => m.id)).toEqual(['m-1']);
+      writeFileSync(list, 'm-1\tModel 1\nm-2\tModel 2\n'); // a new model is released
+      await getOverview('if-stale', c); // inside the TTL: still the old list
+      expect(getModels(c).agy.map((m) => m.id)).toEqual(['m-1']);
+      const o = await getOverview('probe', c);
+      expect(getModels(c).agy.map((m) => m.id)).toEqual(['m-1', 'm-2']);
+      expect(o.agents[1]?.snapshot?.modelCount).toBe(2);
+    } finally {
+      delete process.env.CODEX_HOME;
+    }
   });
 
   it('includes manual cards with their stored state', async () => {

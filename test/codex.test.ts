@@ -28,9 +28,35 @@ describe('config', () => {
     expect(parseConfig('agents: { claude: { cmd: c }, agy: { cmd: a } }\nrouting: { qa: [claude, codex] }').routing.qa).toEqual(['claude', 'codex']);
   });
 
-  it('lists the configured models in the picker', () => {
-    const c = parseConfig('agents: { claude: { cmd: c }, agy: { cmd: a }, codex: { cmd: x, models: [m-1] } }');
-    expect(getModels(c).codex).toEqual([{ id: 'm-1', label: 'm-1' }]);
+  it('lists the configured models in the picker when codex has no models cache', () => {
+    const home = mkdtempSync(join(tmpdir(), 'sb-codex-'));
+    process.env.CODEX_HOME = home;
+    try {
+      const c = parseConfig('agents: { claude: { cmd: c }, agy: { cmd: a }, codex: { cmd: x, models: [m-1] } }');
+      expect(getModels(c).codex).toEqual([{ id: 'm-1', label: 'm-1' }]);
+    } finally {
+      delete process.env.CODEX_HOME;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the visible models from codex\'s own models cache (new releases appear, hidden ones do not)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'sb-codex-'));
+    process.env.CODEX_HOME = home;
+    try {
+      writeFileSync(join(home, 'models_cache.json'), JSON.stringify({
+        models: [
+          { slug: 'gpt-reserve', display_name: 'Reserve', visibility: 'hide' },
+          { slug: 'gpt-7', display_name: 'GPT-7', visibility: 'list' },
+          { slug: 'gpt-6-luna', visibility: 'list' },
+        ],
+      }));
+      const c = parseConfig('agents: { claude: { cmd: c }, agy: { cmd: a }, codex: { cmd: x, models: [old] } }');
+      expect(getModels(c).codex).toEqual([{ id: 'gpt-7', label: 'GPT-7' }, { id: 'gpt-6-luna', label: 'gpt-6-luna' }]);
+    } finally {
+      delete process.env.CODEX_HOME;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

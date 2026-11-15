@@ -1,6 +1,7 @@
 // Single source of truth for "what to show": used by `sb status`, the dashboard page and /api/status.
 import { loadConfig } from './config';
 import { collectUsage } from './limits';
+import { refreshModels } from './models';
 import { computeStatus, STATUS_LABEL } from './status';
 import { readState } from './store';
 import { AGENT_IDS, type AgentId, type AgentStatus, type SwitchboardConfig, type Thresholds, type UsageSnapshot } from './types';
@@ -48,8 +49,9 @@ let inflight: Promise<void> | null = null;
 
 async function refresh(cfg: SwitchboardConfig, probe = false): Promise<void> {
   if (!inflight) {
-    inflight = collectUsage(cfg, new Date(), undefined, probe)
-      .then((results) => {
+    // The button ("probe") also re-reads the model lists, so newly released models show up in the pickers.
+    inflight = Promise.all([collectUsage(cfg, new Date(), undefined, probe), probe ? refreshModels(cfg) : undefined])
+      .then(([results]) => {
         lastErrors = {};
         for (const r of results) if (r.error) lastErrors[r.agent] = r.error;
         lastRefreshAt = Date.now();
@@ -62,7 +64,10 @@ async function refresh(cfg: SwitchboardConfig, probe = false): Promise<void> {
 export function buildOverview(cfg: SwitchboardConfig, now = new Date(), errors: Partial<Record<AgentId, string>> = {}): Overview {
   const state = readState();
   const agents = AGENT_ORDER.map((agent): AgentOverview => {
-    const snapshot = state.snapshots[agent];
+    const stored = state.snapshots[agent];
+    // The model count follows the freshly listed models, not the usage snapshot's older cached count.
+    const listed = agent === 'agy' ? state.meta.agyModelList?.list.length : undefined;
+    const snapshot = stored && listed ? { ...stored, modelCount: listed } : stored;
     const mark = state.exhausted[agent];
     const r = computeStatus(snapshot, cfg.thresholds, cfg.limits.staleAfterMin, now, mark);
     return {
@@ -97,8 +102,8 @@ export function buildOverview(cfg: SwitchboardConfig, now = new Date(), errors: 
 
 /**
  * Builds the overview. 'if-stale' re-reads the CLIs only when the last read is older than
- * dashboard.refreshTtlSec; 'force' always re-reads; 'probe' is 'force' plus a tiny live request to codex (the
- * dashboard's "Оновити" button); 'cached' never runs a CLI.
+ * dashboard.refreshTtlSec; 'force' always re-reads; 'probe' is 'force' plus a tiny live request to codex and a re-read of
+ * the model lists (the dashboard's "Оновити" button); 'cached' never runs a CLI.
  */
 export async function getOverview(mode: RefreshMode = 'if-stale', cfg = loadConfig()): Promise<Overview> {
   const ttlMs = cfg.dashboard.refreshTtlSec * 1000;
