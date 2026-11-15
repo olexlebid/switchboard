@@ -61,6 +61,7 @@ permissions:
       - Edit
       - Glob
       - Grep
+      - WebSearch   # allowed for read-only AEO/market research prompts
       - "Bash(git status*)"
       - "Bash(git diff*)"
       - "Bash(git log*)"
@@ -104,7 +105,7 @@ permissions:
     # no network. Read-only chats (the API) use `--sandbox read-only` automatically. Never use danger-full-access here.
     allow: []
     deny: []
-    args: ["--sandbox", "workspace-write"]
+    args: ["--sandbox", "workspace-write", "-c", "web_search=\"live\"", "-m", "gpt-5.6-luna"]   # web_search=live: native web search tool; -m: model supported by the ChatGPT plan
 
 router:
   shortTypes: [section, copy, qa]     # an agent with status "мало" only takes these
