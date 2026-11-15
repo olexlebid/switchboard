@@ -29,14 +29,26 @@ export type AgentRunInput = {
 
 export type AgentRunResult = { proc: ProcessResult; outcome: Outcome; logPath: string };
 
+/** The configured codex args without the `--sandbox <mode>` pair (the caller sets the sandbox itself). */
+function withoutSandbox(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--sandbox' || args[i] === '-s') i++;
+    else out.push(args[i]!);
+  }
+  return out;
+}
+
 export async function runAgentOnce(input: AgentRunInput): Promise<AgentRunResult> {
   const { cfg, agent, project, prompt, runId, timeoutMs, say, warnings } = input;
   // Read-only runs get a fixed minimal tool set instead of the configured allow/deny lists.
   // codex has no tool lists: read-only means its read-only sandbox (it cannot write files).
+  // Web search is opt-in per run (SB_ALLOW_WEB=1 / `sb chat --web`): claude gets WebSearch, codex keeps its configured search flags.
+  const web = process.env.SB_ALLOW_WEB === '1';
   const rules = input.readOnly
     ? agent === 'codex'
-      ? { allow: [], deny: [], args: ['--sandbox', 'read-only'] }
-      : { allow: ['Read', 'Glob', 'Grep'], deny: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'], args: cfg.permissions[agent].args }
+      ? { allow: [], deny: [], args: ['--sandbox', 'read-only', ...(web ? withoutSandbox(cfg.permissions.codex.args) : [])] }
+      : { allow: ['Read', 'Glob', 'Grep', ...(web && agent === 'claude' ? ['WebSearch'] : [])], deny: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'], args: cfg.permissions[agent].args }
     : cfg.permissions[agent];
   const args = buildAgentArgs(agent, cfg.agents[agent], prompt, rules, timeoutMs, input.sessionId, input.model);
   const logPath = logPathFor(runId);

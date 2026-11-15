@@ -30,7 +30,7 @@ const HELP = `Switchboard
                                [--figma <url>] [--timeout <хв>] [--reviews <id задачі>] [--no-handoff]
                                запустити задачу в гілці sb/<id>. Без --agent агента обирає роутер за
                                лімітами; при ліміті задача передається іншому агентові. main і деплой за тобою.
-  chat "<повідомлення>" --project <папка> [--agent claude|agy|codex|auto] [--new] [--attachments <dir>]
+  chat "<повідомлення>" --project <папка> [--agent claude|agy|codex|auto] [--new] [--read-only] [--web] [--attachments <dir>]
                                чат з агентом у терміналі (та сама розмова, що в дашборді; правки йдуть у гілку sb/c-…)
   queue [--run-due]            список задач; --run-due продовжує ті, що чекали скидання ліміту й уже можуть іти
   resume <id> [--agent ...] [--note "відповідь агенту"]   продовжити задачу, що чекає, заблокована або впала
@@ -194,11 +194,14 @@ async function chatCommand(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { project: { type: 'string' }, agent: { type: 'string' }, new: { type: 'boolean' }, attachments: { type: 'string' } },
+    options: { project: { type: 'string' }, agent: { type: 'string' }, new: { type: 'boolean' }, attachments: { type: 'string' }, 'read-only': { type: 'boolean' }, web: { type: 'boolean' } },
   });
   const text = positionals.join(' ').trim();
+  // --read-only: the agent cannot write, the working tree and branch are untouched, so any number of such chats run in parallel.
+  // --web: also allow the agent's web search (same as SB_ALLOW_WEB=1).
+  if (values.web) process.env.SB_ALLOW_WEB = '1';
   if (!text || !values.project) {
-    console.error('Використання: sb chat "<повідомлення>" --project <папка> [--agent claude|agy|codex|auto] [--new]');
+    console.error('Використання: sb chat "<повідомлення>" --project <папка> [--agent claude|agy|codex|auto] [--new] [--read-only] [--web]');
     return 2;
   }
   if (values.agent && values.agent !== 'auto' && !isAgentId(values.agent)) throw new SbError(`--agent: ${AGENT_IDS.join(', ')} або auto`, 2);
@@ -206,8 +209,8 @@ async function chatCommand(argv: string[]): Promise<number> {
   const project = realpathSync(values.project.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'));
   const state = readState();
   const activeId = state.activeChats[project];
-  let chat = !values.new && activeId ? state.chats[activeId] : undefined;
-  if (!chat) chat = await createChat({ project, mode: (values.agent as 'auto' | AgentId | undefined) ?? 'auto' });
+  let chat = !values.new && !values['read-only'] && activeId ? state.chats[activeId] : undefined;
+  if (!chat) chat = await createChat({ project, mode: (values.agent as 'auto' | AgentId | undefined) ?? 'auto', ...(values['read-only'] ? { readOnly: true } : {}) });
   else if (values.agent) setChatMode(chat.id, values.agent as 'auto' | AgentId);
   addUserMessage(chat.id, { text, attachmentsDir: values.attachments });
   const r = await runChatTurn(chat.id, loadConfig(), (line) => console.log(line));

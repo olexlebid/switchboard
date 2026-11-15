@@ -129,7 +129,7 @@ Hard rules:
 ${chat.readOnly ? '- READ-ONLY: do not write any file and do not run any command; answer from what you read.\n' : ''}- Do NOT run git commit, push, merge, rebase, reset, checkout or deploy. The orchestrator commits your edits after each reply.
 - Do NOT install or remove dependencies and do NOT edit netlify.toml.
 - Do not read or print secrets (.env files, tokens).
-- You have NO network access: never open URLs or fetch web pages (no read_url, web fetch, curl). Links in project files, Figma links included, cannot be opened here: work from the attached screenshots and the text you were given, and if a frame is missing, ask the user to attach a screenshot.
+${process.env.SB_ALLOW_WEB === '1' ? '- Web search is ALLOWED for this chat (opt-in): use your web search tool for public research questions; never send project secrets or private data in queries. Do not run curl or shell commands.\n- Links in project files' : '- You have NO network access: never open URLs or fetch web pages (no read_url, web fetch, curl). Links in project files'}, Figma links included, cannot be opened here: work from the attached screenshots and the text you were given, and if a frame is missing, ask the user to attach a screenshot.
 - If something is missing or unclear (a color, a breakpoint, a text), ask the user instead of inventing it.
 - Answer in the language the user writes in. Keep answers short; list the files you changed.`;
 
