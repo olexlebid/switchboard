@@ -38,6 +38,14 @@ describe('parseAgyQuota', () => {
     expect(g[0]?.group).toBe('Gemini Models');
   });
 
+  it('parses per-model rows that repeat the group name and have no "Remaining" (Gemini 4 Argon)', () => {
+    const g = parseAgyQuota(
+      'Gemini Models\tWeekly Limit Remaining\t100%\t2026-11-22T13:45:49Z\nGemini 4 Argon\tGemini 4 Argon Weekly Limit\t94%\t2026-11-21T20:19:29Z',
+    );
+    expect(g).toHaveLength(2);
+    expect(g[1]).toEqual({ group: 'Gemini 4 Argon', window: 'weekly', usedPct: 6, resetsAt: '2026-11-21T20:19:29Z' });
+  });
+
   it('throws when nothing matches', () => {
     expect(() => parseAgyQuota('Quota:\n(nothing)')).toThrow(UsageParseError);
   });

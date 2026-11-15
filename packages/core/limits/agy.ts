@@ -2,13 +2,15 @@
 // Sample (recon row 16); columns may be separated by spaces OR a single tab:
 //   Gemini Models           Weekly Limit Remaining     100%  2026-10-08T05:45:23Z
 //   Claude and GPT models   Five Hour Limit Remaining  100%  2026-10-01T10:57:03Z
+// Newer per-model rows repeat the group name and drop "Remaining" (percent is still what is left):
+//   Gemini 4 Argon   Gemini 4 Argon Weekly Limit  94%  2026-11-21T20:19:29Z
 import { tmpdir } from 'node:os';
 import { runCommand } from '../exec';
 import type { AgentConfig, GroupWindow, UsageSnapshot, UsageWindow } from '../types';
 import { snippet, stripAnsi, UsageParseError } from './claude';
 
 const LINE_RE =
-  /^\s*(.+?)\s+(Weekly|Five\s+Hour)\s+Limit\s+Remaining\s+(\d+(?:\.\d+)?)\s*%\s+(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s*$/gim;
+  /^\s*(.+?)\s+(?:\1\s+)?(Weekly|Five\s+Hour)\s+Limit(?:\s+Remaining)?\s+(\d+(?:\.\d+)?)\s*%\s+(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s*$/gim;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
