@@ -20,6 +20,15 @@ export function AgentCard({ agent, thresholds, now }: Props) {
     entry[g.window] = g;
     groups.set(g.group, entry);
   }
+  // Antigravity: the router treats the agent as available while any group has room (snapshot windows
+  // hold the LEAST used group), but the headline meters show the MOST used group so real usage is visible.
+  const worst = (w: 'fiveHour' | 'weekly') => {
+    if (agent.agent !== 'agy') return undefined;
+    const rows = (snapshot?.perGroup ?? []).filter((g) => g.window === w && g.resetsAt && Date.parse(g.resetsAt) > now);
+    return rows.length ? rows.reduce((a, b) => (b.usedPct > a.usedPct ? b : a)) : undefined;
+  };
+  const worst5h = worst('fiveHour');
+  const worstWeek = worst('weekly');
   const Icon = agent.agent === 'claude' ? Sparkles : agent.agent === 'codex' ? Bot : Triangle;
   const age = snapshot ? formatAge(now - Date.parse(snapshot.capturedAt)) : undefined;
 
@@ -41,8 +50,8 @@ export function AgentCard({ agent, thresholds, now }: Props) {
         {agent.status !== 'available' && <p className="text-sm text-muted-foreground">{agent.reason}</p>}
         {snapshot ? (
           <div className="flex flex-col gap-2">
-            <UsageMeter label="5 год" pct={agent.fiveHourPct} resetsAt={snapshot.fiveHour?.resetsAt} thresholds={thresholds} now={now} dim={agent.stale} />
-            <UsageMeter label="Тиждень" pct={agent.weeklyPct} resetsAt={snapshot.weekly?.resetsAt} thresholds={thresholds} now={now} dim={agent.stale} />
+            <UsageMeter label="5 год" pct={worst5h?.usedPct ?? agent.fiveHourPct} resetsAt={worst5h?.resetsAt ?? snapshot.fiveHour?.resetsAt} thresholds={thresholds} now={now} dim={agent.stale} />
+            <UsageMeter label="Тиждень" pct={worstWeek?.usedPct ?? agent.weeklyPct} resetsAt={worstWeek?.resetsAt ?? snapshot.weekly?.resetsAt} thresholds={thresholds} now={now} dim={agent.stale} />
             {groups.size > 0 && (
               <Collapsible>
                 <CollapsibleTrigger className="group/trigger flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
