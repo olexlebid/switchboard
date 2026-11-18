@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard</title>
+<meta name="description" content="A local switchboard for Claude Code, Antigravity and ChatGPT (Codex): limits, routing and handoff between agents when one runs out.">
+<meta property="og:title" content="Switchboard: Claude hits the limit, ChatGPT takes over">
+<meta property="og:description" content="Local orchestrator for three AI coding agents: live limits, routing by task type, checkpoint and handoff when a limit hits.">
+<meta property="og:image" content="slides/slide-01.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#f3f1ec;--paper:#fff;--ink:#15191e;--ink-2:#4a535c;--ink-3:#8a929a;--line:#dcd8cf;
+    --red:#e0442f;--amber:#efa519;--green:#2f9e5a;--code:#15191e;--code-ink:#f3f1ec;--shadow:#15191e}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --bg:#15191e;--paper:#1e242b;--ink:#f3f1ec;--ink-2:#b9c0c7;--ink-3:#7d868f;--line:#2f363e;--code:#0d1014;--shadow:#000}}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:"Inter",system-ui,sans-serif;line-height:1.5}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 16px}
+  header{display:flex;justify-content:space-between;align-items:center;padding:24px 0;font-family:"JetBrains Mono",monospace;font-size:15px;color:var(--ink-3)}
+  header a{color:var(--ink);text-decoration:none;font-weight:700}
+  .k{font-family:"JetBrains Mono",monospace;font-size:14px;color:var(--ink-3);letter-spacing:.02em;margin-bottom:12px}
+  h1{font-size:clamp(40px,7vw,80px);line-height:1.02;font-weight:800;letter-spacing:-.035em;margin-top:40px}
+  h2{font-size:clamp(30px,4.5vw,48px);line-height:1.08;font-weight:800;letter-spacing:-.03em}
+  .hl{background:linear-gradient(transparent 62%,var(--amber) 62%,var(--amber) 90%,transparent 90%)}
+  .lead{font-size:clamp(18px,2.2vw,22px);color:var(--ink-2);margin-top:20px;max-width:680px}
+  .cta{display:flex;gap:14px;flex-wrap:wrap;margin-top:32px}
+  .btn{display:inline-flex;align-items:center;gap:10px;padding:14px 22px;border-radius:14px;font-weight:700;text-decoration:none;
+    border:2px solid var(--ink);color:var(--ink);background:var(--paper);box-shadow:5px 5px 0 var(--shadow)}
+  .btn.primary{background:var(--amber);color:#15191e;border-color:#15191e}
+  section{padding:72px 0 0}
+  .card{background:var(--paper);border:2px solid var(--ink);border-radius:22px;box-shadow:8px 8px 0 var(--shadow)}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px;margin-top:28px}
+  .steps .card{padding:24px}
+  .num{width:44px;height:44px;border-radius:50%;border:2px solid var(--ink);display:flex;align-items:center;justify-content:center;
+    font-family:"JetBrains Mono";font-weight:700;margin-bottom:14px}
+  .steps b{display:block;font-size:19px;line-height:1.3}
+  .steps p{color:var(--ink-2);margin-top:6px;font-size:15px}
+  .slides{display:flex;gap:18px;overflow-x:auto;scroll-snap-type:x mandatory;padding:8px 4px 20px;margin-top:28px}
+  .slides img{flex:0 0 auto;width:min(78vw,380px);height:auto;border-radius:16px;border:2px solid var(--ink);scroll-snap-align:start}
+  .hint{font-family:"JetBrains Mono";font-size:14px;color:var(--ink-3)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:28px}
+  .cell{padding:22px;border:2px solid var(--ink);border-radius:18px;background:var(--paper)}
+  .cell b{font-size:18px} .cell p{color:var(--ink-2);font-size:15px;margin-top:6px}
+  pre{background:var(--code);color:var(--code-ink);border-radius:16px;padding:22px;overflow-x:auto;margin-top:20px;
+    font-family:"JetBrains Mono",monospace;font-size:14px;line-height:1.7}
+  pre .c{color:#7d868f}
+  ul.req{margin-top:20px;padding-left:20px;color:var(--ink-2)} ul.req li{margin-top:6px}
+  code{font-family:"JetBrains Mono",monospace;font-size:.92em}
+  .safety{background:#15191e;color:#f3f1ec;border-radius:22px;padding:32px;margin-top:28px}
+  .safety li{margin-top:10px;list-style:none;padding-left:26px;position:relative;color:#d4d9de}
+  .safety li:before{content:"✓";position:absolute;left:0;color:var(--amber);font-weight:800}
+  footer{padding:72px 0 40px;font-family:"JetBrains Mono";font-size:14px;color:var(--ink-3);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  footer a{color:var(--ink-2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><a href="./">switchboard</a><a href="https://github.com/olexlebid/switchboard">GitHub →</a></header>
+
+  <h1>Claude hits the <span class="hl">limit</span>.<br>ChatGPT takes over.</h1>
+  <p class="lead">A local switchboard for three AI coding agents: Claude Code, Antigravity and ChatGPT (Codex CLI). It reads what's left on every subscription, sends each task to whoever can take it, and hands the task over when a limit hits.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/olexlebid/switchboard">Get the code →</a>
+    <a class="btn" href="#install">Install</a>
+  </div>
+
+  <section>
+    <div class="k">swipe through</div>
+    <h2>How it works, in 8 slides.</h2>
+    <div class="slides" aria-label="Carousel">
+      <img src="slides/slide-01.jpg" alt="Claude hits the limit, ChatGPT takes over: three limit meters, Claude exhausted, ChatGPT takes the task">
+      <img src="slides/slide-02.jpg" alt="Why: three subscriptions, one always idle" loading="lazy">
+      <img src="slides/slide-03.jpg" alt="Core idea: read limits, pick by task type, checkpoint, next agent picks it up" loading="lazy">
+      <img src="slides/slide-04.jpg" alt="What's inside: handoff, limits, router, chat, cross review, attachments" loading="lazy">
+      <img src="slides/slide-05.jpg" alt="Agents can't merge, push or deploy on their own" loading="lazy">
+      <img src="slides/slide-06.jpg" alt="Dashboard wireframe with agent cards and activity" loading="lazy">
+      <img src="slides/slide-07.jpg" alt="Numbers: 3 agents, 7 weeks, 53 of 57 commits with Claude Code, 2 handoffs max" loading="lazy">
+      <img src="slides/slide-08.jpg" alt="Want to try it?" loading="lazy">
+    </div>
+    <p class="hint">← scroll →</p>
+  </section>
+
+  <section>
+    <div class="k">the core idea</div>
+    <h2>Limits first. Agent second.</h2>
+    <div class="steps">
+      <div class="card"><div class="num">1</div><b>Read what's left</b><p>5-hour and weekly windows for every agent: available, low, reserve, exhausted.</p></div>
+      <div class="card"><div class="num">2</div><b>Route by task type</b><p>research, ideas, copy, section, review, qa: each has its preferred order of agents.</p></div>
+      <div class="card"><div class="num">3</div><b>Checkpoint on a limit</b><p>a wip commit plus a handoff note in <code>PROGRESS.md</code>: files, last output, reason.</p></div>
+      <div class="card"><div class="num">4</div><b>Next agent continues</b><p>same <code>sb/*</code> branch, up to 2 handoffs, then it waits for you.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="k">what's inside</div>
+    <h2>3 agents, one dashboard.</h2>
+    <div class="grid">
+      <div class="cell"><b>Dashboard</b><p>shadcn/ui on <code>127.0.0.1</code>: limits, tasks and chats across projects in one place.</p></div>
+      <div class="cell"><b>Chat</b><p>several chats at once, switch agent and model mid-conversation, commit per answer.</p></div>
+      <div class="cell"><b>Cross review</b><p>code is always reviewed by a different agent than the one who wrote it.</p></div>
+      <div class="cell"><b>Attachments</b><p>screenshots, PDF, docx, xlsx, even video frames via ffmpeg.</p></div>
+      <div class="cell"><b>Read-only parallel chats</b><p><code>sb chat --read-only --web</code> for research next to a writing task.</p></div>
+      <div class="cell"><b>API for Make</b><p><code>sb api</code>: prompt in, answer out, Bearer token, read-only by default.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="k">safety</div>
+    <h2>Main changes only when you say so.</h2>
+    <ul class="safety">
+      <li>Agents work only in <code>sb/*</code> branches and never merge, push or deploy.</li>
+      <li>"Merge into main" is a button with a confirmation, fast-forward only.</li>
+      <li>Switchboard itself never runs <code>git push</code> or a deploy.</li>
+      <li>One account per provider, subscriptions, no API keys. Secrets are masked in logs.</li>
+    </ul>
+  </section>
+
+  <section id="install">
+    <div class="k">install</div>
+    <h2>Run it locally.</h2>
+    <ul class="req">
+      <li>Node.js 20+ and pnpm (<code>corepack enable</code>)</li>
+      <li><code>claude</code> and <code>agy</code> installed and signed in; <code>codex</code> optional (<code>npm i -g @openai/codex</code>, then <code>codex login</code>)</li>
+      <li><code>ffmpeg</code> optional, for video attachments</li>
+    </ul>
+<pre>git clone https://github.com/olexlebid/switchboard
+cd switchboard
+pnpm install
+pnpm sb status            <span class="c"># shows each agent's limits</span>
+pnpm sb dashboard         <span class="c"># http://127.0.0.1:4321</span>
+pnpm sb project add ~/projects/my-site
+pnpm sb init ~/projects/my-site</pre>
+    <p class="lead" style="font-size:16px">Full docs (in Ukrainian) are in the <a href="https://github.com/olexlebid/switchboard#readme" style="color:inherit">README</a>.</p>
+  </section>
+
+  <footer><span>typescript · astro · shadcn/ui · built with claude code</span><a href="https://github.com/olexlebid/switchboard">github.com/olexlebid/switchboard</a></footer>
+</div>
+</body>
+</html>
